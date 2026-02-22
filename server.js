@@ -1,66 +1,86 @@
-const express = require("express");
-const { google } = require("googleapis");
+import express from "express";
+import fetch from "node-fetch";
 
 const app = express();
-app.use(express.text());
 
-const PORT = process.env.PORT || 3000;
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 
-const auth = new google.auth.GoogleAuth({
-  keyFile: "credentials.json",
-  scopes: ["https://www.googleapis.com/auth/gmail.modify"],
-});
+let accessToken = "";
+let job = "";
 
-async function getNewOrder() {
-  const client = await auth.getClient();
-  const gmail = google.gmail({ version: "v1", auth: client });
-
-  const res = await gmail.users.messages.list({
-    userId: "me",
-    q: 'in:inbox subject:"New Order" -label:Printed',
-    maxResults: 1,
+async function refreshAccessToken() {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body:
+      `client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}` +
+      `&refresh_token=${REFRESH_TOKEN}&grant_type=refresh_token`,
   });
 
-  if (!res.data.messages) return null;
-
-  const msg = await gmail.users.messages.get({
-    userId: "me",
-    id: res.data.messages[0].id,
-  });
-
-  const body = Buffer.from(
-    msg.data.payload.parts[0].body.data,
-    "base64"
-  ).toString("utf-8");
-
-  await gmail.users.messages.modify({
-    userId: "me",
-    id: res.data.messages[0].id,
-    requestBody: {
-      addLabelIds: ["Printed"],
-    },
-  });
-
-  return body;
+  const data = await res.json();
+  accessToken = data.access_token;
 }
 
-app.get("/cloudprnt", async (req, res) => {
-  const order = await getNewOrder();
+async function checkGmail() {
+  await refreshAccessToken();
 
-  if (!order) {
-    res.set("X-Star-CloudPRNT-StatusCode", "204");
-    return res.send("");
-  }
+  const res = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:inbox subject:\"New Order\" -label:Printed newer_than:2d",
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
 
-  const receipt =
+  const data = await res.json();
+
+  if (!data.messages) return;
+
+  const id = data.messages[0].id;
+
+  const msg = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  const full = await msg.json();
+
+  const body = Buffer.from(
+    full.payload.parts[0].body.data,
+    "base64"
+  ).toString("utf8");
+
+  job =
     "HOWARD'S DONUTS\n" +
-    "----------------------\n" +
-    order +
-    "\n\n\n\n";
+    "-------------------------\n" +
+    body +
+    "\n\n\n";
 
-  res.set("X-Star-CloudPRNT-Job", "true");
-  res.set("X-Star-CloudPRNT-StatusCode", "200");
-  res.send(receipt);
+  await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/modify`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ addLabelIds: ["Label_Printed"] }),
+    }
+  );
+}
+
+setInterval(checkGmail, 10000);
+
+// ====== CLOUDPRNT ======
+
+app.get("/", (req, res) => {
+  res.setHeader("X-Star-CloudPRNT-Job", job ? "true" : "false");
+  res.status(200).send("OK");
 });
 
-app.listen(PORT, () => console.log("Server running"));
+app.post("/", (req, res) => {
+  res.setHeader("Content-Type", "text/plain");
+  res.send(job);
+  job = "";
+});
+
+app.listen(3000);
