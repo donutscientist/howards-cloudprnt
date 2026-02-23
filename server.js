@@ -13,13 +13,12 @@ app.post('/starcloudprnt', (req, res) => {
 
   console.log("PRINTER POLLED");
 
-  res.setHeader("Content-Type", "application/json");
+  res.writeHead(200, {
+    "Content-Type": "application/json"
+  });
 
-  res.status(200).end(JSON.stringify({
-    jobReady: true
-  }));
+  res.end('{"jobReady":true}');
 });
-
 app.get('/starcloudprnt', (req, res) => {
 
   console.log("PRINTER REQUESTED JOB");
