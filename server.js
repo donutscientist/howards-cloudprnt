@@ -14,7 +14,8 @@ app.post('/starcloudprnt', (req, res) => {
   console.log("PRINTER POLLED");
 
   res.writeHead(200, {
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
+    "X-Star-CloudPRNT-Job": "true"
   });
 
   res.end('{"jobReady":true}');
