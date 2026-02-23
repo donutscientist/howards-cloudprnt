@@ -22,30 +22,18 @@ app.post('/starcloudprnt', (req, res) => {
 
 app.get('/starcloudprnt', (req, res) => {
 
-  if(!jobPending){
-    return res.status(204).end();
-  }
-
   console.log("PRINTER REQUESTED JOB");
 
   const receipt = Buffer.from([
-    0x1b,0x40,
-    0x48,0x4f,0x57,0x41,0x52,0x44,0x27,0x53,0x20,0x44,0x4f,0x4e,0x55,0x54,0x53,0x0a,
-    0x43,0x4c,0x4f,0x55,0x44,0x50,0x52,0x4e,0x54,0x20,0x57,0x4f,0x52,0x4b,0x53,0x21,0x0a,
-    0x0a,
-    0x1b,0x64,0x02,
-    0x1b,0x69
+    0x1B, 0x40,              // Initialize printer
+    0x1B, 0x61, 0x01,        // Center
+    ...Buffer.from("HOWARD'S DONUTS\n\n"),
+    0x1B, 0x61, 0x00,        // Left align
+    ...Buffer.from("TEST PRINT SUCCESS\n\n"),
+    0x1D, 0x56, 0x41, 0x10   // Cut paper
   ]);
 
-  jobPending = false;
-
-  res.set({
-    "Content-Type": "application/vnd.star.starprnt",
-    "Content-Length": receipt.length,
-    "X-Star-CloudPRNT-Job": "true",
-    "X-Star-CloudPRNT-StatusCode": "200"
-  });
-
+  res.setHeader("Content-Type", "application/octet-stream");
   res.status(200).send(receipt);
 });
 
