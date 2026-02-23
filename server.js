@@ -7,9 +7,24 @@ app.get('/', (req, res) => {
   res.send('OK');
 });
 
-app.post('/starcloudprnt', (req, res) => {
+let jobPending = true;
 
+app.post('/starcloudprnt', (req, res) => {
   console.log("PRINTER POLLED");
+
+  res.set("Content-Type", "application/json");
+  res.status(200).send({
+    jobReady: jobPending
+  });
+});
+
+app.get('/starcloudprnt', (req, res) => {
+
+  if(!jobPending){
+    return res.status(204).end();
+  }
+
+  console.log("PRINTER REQUESTED JOB");
 
   const receipt = Buffer.from([
     0x1b,0x40,
@@ -19,6 +34,8 @@ app.post('/starcloudprnt', (req, res) => {
     0x1b,0x64,0x02,
     0x1b,0x69
   ]);
+
+  jobPending = false;
 
   res.set({
     "Content-Type": "application/vnd.star.starprnt",
