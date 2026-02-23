@@ -27,6 +27,7 @@ async function checkEmail() {
       q: 'is:unread',
       maxResults: 1
     });
+    
 
     if (res.data.messages && !job) {
 
@@ -41,6 +42,14 @@ async function checkEmail() {
         0x1b, 0x64, 0x03,
         0x1d, 0x56, 0x00
       ]);
+
+      await gmail.users.messages.modify({
+  userId: 'me',
+  id: messageId,
+  requestBody: {
+    removeLabelIds: ['UNREAD']
+  }
+});
 
     }
 
