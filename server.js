@@ -8,16 +8,18 @@ app.get('/', (req, res) => {
 });
 
 app.post('/starcloudprnt', (req, res) => {
-  console.log("🖨️ PRINTER POLLED");
+  console.log("PRINTER POLLED");
 
-  const receipt = `
-^XA
-^FO50,50^ADN,36,20^FDHOWARD'S DONUTS TEST^FS
-^XZ
-`;
+  const receipt =
+  "\x1b\x40" +
+  "HOWARD'S DONUTS\n" +
+  "CloudPRNT Working!\n\n" +
+  "Time: " + new Date() + "\n\n\n\n\n" +
+  "\x1b\x64\x02" +
+  "\x1b\x69";
 
   res.set({
-    "Content-Type": "text/plain",
+    "Content-Type": "application/vnd.star.starprnt",
     "X-Star-CloudPRNT-Job": "true",
     "X-Star-CloudPRNT-StatusCode": "200"
   });
