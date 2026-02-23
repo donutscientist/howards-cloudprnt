@@ -29,29 +29,32 @@ async function checkEmail() {
     });
     
 
-    if (res.data.messages && !job) {
+if (res.data.messages && !job) {
 
-      console.log("EMAIL FOUND - CREATING JOB");
+  console.log("EMAIL FOUND - CREATING JOB");
 
-      job = Buffer.from([
+  const messageId = res.data.messages[0].id;   // 🔥🔥🔥 THIS IS THE FIX
 
-        0x1b, 0x40,
-        0x1b, 0x61, 0x01,
-        0x1b, 0x21, 0x30,
-        0x4e,0x45,0x57,0x20,0x4f,0x52,0x44,0x45,0x52,
-        0x0a,
-        0x1b, 0x64, 0x03,
-        0x1d, 0x56, 0x00
-      ]);
-      jobsent = false;
+  job = Buffer.from([
+    0x1b, 0x40,
+    0x1b, 0x61, 0x01,
+    0x1b, 0x21, 0x30,
+    0x4e,0x45,0x57,0x20,0x4f,0x52,0x44,0x45,0x52,
+    0x0a,
+    0x1b, 0x64, 0x03,
+    0x1d, 0x56, 0x00
+  ]);
 
-      await gmail.users.messages.modify({
-  userId: 'me',
-  id: messageId,
-  requestBody: {
-    removeLabelIds: ['UNREAD']
-  }
-});
+  jobsent = false;
+
+  await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: {
+      removeLabelIds: ['UNREAD']
+    }
+  });
+
 
     }
 
