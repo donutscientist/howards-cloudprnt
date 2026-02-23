@@ -1,3 +1,6 @@
+let job = null;
+let jobSent = false;
+
 const { google } = require('googleapis');
 
 const auth = new google.auth.OAuth2(
@@ -14,9 +17,6 @@ const gmail = google.gmail({ version: 'v1', auth });
 const express = require('express');
 const app = express();
 
-app.use(express.raw({ type: '*/*' }));
-
-let job = null;
 
 async function checkEmail() {
 
@@ -34,6 +34,8 @@ async function checkEmail() {
       console.log("EMAIL FOUND - CREATING JOB");
 
       job = Buffer.from([
+
+        jobsent = false;
         0x1b, 0x40,
         0x1b, 0x61, 0x01,
         0x1b, 0x21, 0x30,
@@ -79,40 +81,41 @@ app.get('/createjob', (req, res) => {
   res.send("Job created");
 });
 
-
-// Printer polls this
-app.post('/starcloudprnt', (req, res) => {
+app.post('/starcloudprnt',(req,res)=>{
 
   console.log("PRINTER POLLED");
 
-  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Type","application/json");
 
   res.send({
-    jobReady: job !== null,
-    mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: "12345"
+    jobReady: job !== null && !jobSent,
+    mediaTypes:["application/vnd.star.starprnt"],
+    jobToken:"12345"
   });
+
 });
 
 
 // Printer downloads job here
-app.get('/starcloudprnt', (req, res) => {
+app.get('/starcloudprnt',(req,res)=>{
 
-  if(job){
+  if(job && !jobSent){
 
     console.log("PRINTER REQUESTED JOB");
 
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    jobSent = true;
+
+    res.setHeader("Content-Type","application/vnd.star.starprnt");
     res.send(job);
 
-    job = null;   // 🔥🔥🔥 THIS STOPS INFINITE PRINTING
-
-  } else {
+  }else{
 
     res.status(204).send();
 
   }
+
 });
+
 setInterval(checkEmail, 5000);
 
 app.listen(process.env.PORT || 3000, () => {
