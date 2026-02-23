@@ -10,12 +10,14 @@ app.get('/', (req, res) => {
 let jobPending = true;
 
 app.post('/starcloudprnt', (req, res) => {
+
   console.log("PRINTER POLLED");
 
-  res.set("Content-Type", "application/json");
-  res.status(200).send({
-    jobReady: jobPending
-  });
+  res.setHeader("Content-Type", "application/json");
+
+  res.status(200).end(JSON.stringify({
+    jobReady: true
+  }));
 });
 
 app.get('/starcloudprnt', (req, res) => {
