@@ -1,5 +1,5 @@
 let job = null;
-let jobSent = false;
+let jobSent = true;
 
 const { google } = require('googleapis');
 
@@ -35,7 +35,6 @@ async function checkEmail() {
 
       job = Buffer.from([
 
-        jobsent = false;
         0x1b, 0x40,
         0x1b, 0x61, 0x01,
         0x1b, 0x21, 0x30,
@@ -44,6 +43,7 @@ async function checkEmail() {
         0x1b, 0x64, 0x03,
         0x1d, 0x56, 0x00
       ]);
+      jobsent = false;
 
       await gmail.users.messages.modify({
   userId: 'me',
