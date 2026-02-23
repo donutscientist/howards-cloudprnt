@@ -24,7 +24,7 @@ async function checkEmail() {
 
     const res = await gmail.users.messages.list({
       userId: 'me',
-      q: 'is:unread',
+      q: 'is:unread label:AUTO_PRINT',
       maxResults: 1
     });
     
