@@ -1,9 +1,54 @@
+const { google } = require('googleapis');
+
+const auth = new google.auth.OAuth2(
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET
+);
+
+auth.setCredentials({
+  refresh_token: process.env.REFRESH_TOKEN
+});
+
+const gmail = google.gmail({ version: 'v1', auth });
+
 const express = require('express');
 const app = express();
 
 app.use(express.raw({ type: '*/*' }));
 
 let job = null;
+
+async function checkEmail() {
+
+  try {
+
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      q: 'is:unread',
+      maxResults: 1
+    });
+
+    if (res.data.messages && !job) {
+
+      console.log("EMAIL FOUND - CREATING JOB");
+
+      job = Buffer.from([
+        0x1b, 0x40,
+        0x1b, 0x61, 0x01,
+        0x1b, 0x21, 0x30,
+        0x4e,0x45,0x57,0x20,0x4f,0x52,0x44,0x45,0x52,
+        0x0a,
+        0x1b, 0x64, 0x03,
+        0x1d, 0x56, 0x00
+      ]);
+
+    }
+
+  } catch(e) {
+    console.log("GMAIL ERROR:", e.message);
+  }
+
+}
 
 // TEST route to manually create job
 app.get('/createjob', (req, res) => {
@@ -59,6 +104,7 @@ app.get('/starcloudprnt', (req, res) => {
 
   }
 });
+setInterval(checkEmail, 5000);
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
