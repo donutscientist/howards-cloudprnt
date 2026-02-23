@@ -13,14 +13,16 @@ app.post('/starcloudprnt', (req, res) => {
 
   console.log("PRINTER POLLED");
 
-  res.writeHead(200, {
-    "Content-Type": "application/json",
-    "X-Star-CloudPRNT-Job": "true",
-    "X-Star-CloudPRNT-JobID": "1"
+  res.setHeader("Content-Type", "application/json");
+
+  res.send({
+    "jobReady": true,
+    "mediaTypes": ["application/vnd.star.starprnt"],
+    "jobToken": "12345"
   });
 
-  res.end('{"jobReady":true}');
 });
+
 app.get('/starcloudprnt', (req, res) => {
 
   console.log("PRINTER REQUESTED JOB");
