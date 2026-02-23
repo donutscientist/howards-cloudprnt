@@ -1,5 +1,5 @@
 let job = null;
-let jobSent = true;
+let jobSent = false;
 
 const { google } = require('googleapis');
 
