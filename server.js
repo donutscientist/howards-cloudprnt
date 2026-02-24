@@ -17,6 +17,72 @@ const gmail = google.gmail({ version: 'v1', auth });
 const express = require('express');
 const app = express();
 
+function getBody(payload){
+
+  if(payload.parts){
+    for(let part of payload.parts){
+
+      if(part.mimeType === "text/plain"){
+        return Buffer.from(part.body.data,'base64').toString();
+      }
+
+      if(part.mimeType === "text/html"){
+        return Buffer.from(part.body.data,'base64')
+        .toString()
+        .replace(/<[^>]+>/g,"");
+      }
+
+    }
+  }
+
+  return Buffer.from(payload.body.data,'base64').toString();
+
+}
+
+function parseItems(body){
+
+  const lines = body.split("\n");
+
+  let output = "";
+  let currentItem = "";
+
+  for(let line of lines){
+
+    line = line.trim();
+
+    // ITEM like "2x Chocolate Donut"
+    if(line.match(/^\d+x\s/)){
+
+      if(currentItem){
+        output += currentItem + "\n";
+      }
+
+      // KEEP FORMAT: 2x Chocolate Donut
+      currentItem = line;
+    }
+
+    // MODIFIER like "+ Extra Glaze"
+    else if(line.startsWith("+")){
+
+      let mod = line.replace("+","").trim();
+
+      // force qty if missing
+      if(!mod.match(/^\d+x\s/)){
+        mod = "1x " + mod;
+      }
+
+      // 🔥 highlight EVERY modifier + INDENT
+      currentItem += "\n   \x1d\x42\x01" + mod + "\x1d\x42\x00";
+    }
+
+  }
+
+  if(currentItem){
+    output += currentItem + "\n";
+  }
+
+  return output;
+}
 
 async function checkEmail() {
 
@@ -35,17 +101,47 @@ if (res.data.messages && !job) {
 
   const messageId = res.data.messages[0].id;   // 🔥🔥🔥 THIS IS THE FIX
 
-  job = Buffer.from([
-    0x1b, 0x40,
-    0x1b, 0x61, 0x01,
-    0x1b, 0x21, 0x30,
-    0x4e,0x45,0x57,0x20,0x4f,0x52,0x44,0x45,0x52,
-    0x0a,
-    0x1b, 0x64, 0x03,
-    0x1d, 0x56, 0x00
-  ]);
+  const msg = await gmail.users.messages.get({
+  userId:'me',
+  id:messageId
+});
 
-  jobsent = false;
+const body = getBody(msg.data.payload);
+
+const items = parseItems(body);
+
+// CUSTOMER NAME
+let customer = "UNKNOWN";
+let orderType = "UNKNOWN";
+
+const nameMatch = body.match(/Customer:\s(.+)/i);
+if(nameMatch) customer = nameMatch[1];
+
+// ORDER TYPE
+if(body.includes("Pickup")) orderType = "PICKUP";
+if(body.includes("Delivery")) orderType = "DELIVERY";
+
+const receipt =
+`-----------------------
+NEW ORDER
+
+\x1b\x42\x01${customer}\x1b\x42\x00
+
+\x1b\x42\x01${orderType}\x1b\x42\x00
+
+${items}
+
+-----------------------
+`;
+
+job = Buffer.from([
+  0x1b,0x40,
+  ...Buffer.from(receipt),
+  0x1b,0x64,0x03,
+  0x1d,0x56,0x00
+]);
+
+jobSent = false;
 
   await gmail.users.messages.modify({
     userId: 'me',
