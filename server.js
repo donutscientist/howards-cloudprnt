@@ -1,71 +1,89 @@
+const express = require("express");
+const { google } = require("googleapis");
+
+const app = express();
+app.use(express.raw({ type: "*/*" }));
+
+// --------------------
+// PRINT JOB QUEUE
+// --------------------
 let jobs = [];
 
-const { google } = require('googleapis');
-
+// --------------------
+// GMAIL AUTH
+// --------------------
 const auth = new google.auth.OAuth2(
   process.env.CLIENT_ID,
   process.env.CLIENT_SECRET
 );
 
 auth.setCredentials({
-  refresh_token: process.env.REFRESH_TOKEN
+  refresh_token: process.env.REFRESH_TOKEN,
 });
 
-const gmail = google.gmail({ version: 'v1', auth });
+const gmail = google.gmail({ version: "v1", auth });
 
-const express = require('express');
-const app = express();
-
-function getBody(payload){
-
-  if(payload.parts){
-    for(let part of payload.parts){
-
-      if(part.mimeType === "text/plain"){
-        return Buffer.from(part.body.data,'base64').toString();
+// --------------------
+// EMAIL BODY EXTRACT
+// --------------------
+function getBody(payload) {
+  // Walk parts (plain/text preferred)
+  if (payload.parts && Array.isArray(payload.parts)) {
+    for (const part of payload.parts) {
+      if (part.mimeType === "text/plain" && part.body?.data) {
+        return Buffer.from(part.body.data, "base64").toString("utf8");
+      }
+      if (part.mimeType === "text/html" && part.body?.data) {
+        return Buffer.from(part.body.data, "base64")
+          .toString("utf8")
+          .replace(/<[^>]+>/g, "");
       }
 
-      if(part.mimeType === "text/html"){
-        return Buffer.from(part.body.data,'base64')
-        .toString()
-        .replace(/<[^>]+>/g,"");
+      // Sometimes payload is nested (parts inside parts)
+      if (part.parts) {
+        const nested = getBody(part);
+        if (nested) return nested;
       }
-
     }
   }
 
-  return Buffer.from(payload.body.data,'base64').toString();
+  // Fallback to payload.body.data
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64").toString("utf8");
+  }
 
+  return "";
 }
 
-function parseItems(body){
-
+// --------------------
+// PARSE ITEMS + MODIFIERS
+// - Item line: "2x Chocolate Donut"
+// - Modifier line: "+ Extra Glaze" or "+ 2x Sprinkles"
+// Output: [{ item: "2x ...", modifiers: ["1x ...", "2x ..."] }]
+// --------------------
+function parseItems(body) {
   const lines = body.split("\n");
 
-  let output = [];
+  const output = [];
   let currentItem = null;
 
-  for(let line of lines){
+  for (let raw of lines) {
+    let line = (raw || "").trim();
+    if (!line) continue;
 
-    line = line.trim();
-
-    // ITEM like "2x Chocolate Donut"
-    if(line.match(/^\d+x\s/)){
-
-      currentItem = {
-        item: line,
-        modifiers:[]
-      };
-
+    // ITEM like "2x Chocolate Donut"  (no space between qty and x)
+    if (/^\d+x\s+/.test(line)) {
+      currentItem = { item: line, modifiers: [] };
       output.push(currentItem);
+      continue;
     }
 
-    // MODIFIER like "+ Extra Glaze"
-    else if(line.startsWith("+") && currentItem){
+    // MODIFIER like "+ Extra Glaze" or "+ 2x Sprinkles"
+    if (line.startsWith("+") && currentItem) {
+      let mod = line.replace(/^\+\s*/, "").trim();
 
-      let mod = line.replace("+","").trim();
-
-      if(!mod.match(/^\d+x\s/)){
+      // if missing qty, force "1x "
+      if (!/^\d+x\s+/.test(mod)) {
         mod = "1x " + mod;
       }
 
@@ -75,157 +93,163 @@ function parseItems(body){
 
   return output;
 }
-function buildReceipt(customer, orderType, items){
 
-  let buffers = [];
+// --------------------
+// BUILD STARPRNT JOB (Buffer)
+// Uses "highlight" (inverted) for:
+// - customer
+// - orderType
+// - EVERY modifier
+// --------------------
+function buildReceipt(customer, orderType, items) {
+  const buffers = [];
 
-  buffers.push(Buffer.from([0x1b,0x40])); // init
+  // init
+  buffers.push(Buffer.from([0x1b, 0x40]));
 
-  buffers.push(Buffer.from("\nNEW ORDER\n\n"));
+  // header
+  buffers.push(Buffer.from("\nNEW ORDER\n\n", "ascii"));
 
-  // CUSTOMER HIGHLIGHT
-  buffers.push(Buffer.from([0x1d,0x42,0x01]));
-  buffers.push(Buffer.from(customer + "\n"));
-  buffers.push(Buffer.from([0x1d,0x42,0x00]));
+  // CUSTOMER (highlight on/off)
+  buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
+  buffers.push(Buffer.from(String(customer) + "\n", "ascii"));
+  buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
 
-  // ORDER TYPE HIGHLIGHT
-  buffers.push(Buffer.from([0x1d,0x42,0x01]));
-  buffers.push(Buffer.from(orderType + "\n\n"));
-  buffers.push(Buffer.from([0x1d,0x42,0x00]));
+  // ORDER TYPE (highlight on/off)
+  buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
+  buffers.push(Buffer.from(String(orderType) + "\n\n", "ascii"));
+  buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
 
-  for(let order of items){
+  // items + modifiers
+  for (const order of items) {
+    buffers.push(Buffer.from(order.item + "\n", "ascii"));
 
-    // ITEM NORMAL
-    buffers.push(Buffer.from(order.item + "\n"));
-
-    for(let mod of order.modifiers){
-
-      // MODIFIER HIGHLIGHT + INDENT
-      buffers.push(Buffer.from([0x1d,0x42,0x01]));
-      buffers.push(Buffer.from("   " + mod + "\n"));
-      buffers.push(Buffer.from([0x1d,0x42,0x00]));
+    for (const mod of order.modifiers) {
+      // modifier highlighted + indented
+      buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
+      buffers.push(Buffer.from("   " + mod + "\n", "ascii"));
+      buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
     }
-
   }
 
-  buffers.push(Buffer.from("\n\n"));
-  buffers.push(Buffer.from([0x1b,0x64,0x03]));
-  buffers.push(Buffer.from([0x1d,0x56,0x00]));
+  // footer
+  buffers.push(Buffer.from("\n", "ascii"));
+  buffers.push(Buffer.from([0x1b, 0x64, 0x03])); // feed 3
+  buffers.push(Buffer.from([0x1d, 0x56, 0x00])); // cut
 
   return Buffer.concat(buffers);
 }
+
+// --------------------
+// CHECK EMAIL
+// --------------------
 async function checkEmail() {
-
   try {
-
     const res = await gmail.users.messages.list({
-      userId: 'me',
-      q: 'is:unread label:AUTO_PRINT',
-      maxResults: 1
+      userId: "me",
+      q: "is:unread label:AUTO_PRINT",
+      maxResults: 1,
     });
-    
 
-if (res.data.messages) {
+    if (!res.data.messages || res.data.messages.length === 0) return;
 
-  console.log("EMAIL FOUND - CREATING JOB");
+    const messageId = res.data.messages[0].id;
+    console.log("EMAIL FOUND - CREATING JOB:", messageId);
 
-  const messageId = res.data.messages[0].id;   // 🔥🔥🔥 THIS IS THE FIX
+    // Fetch message
+    const msg = await gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    });
 
-  const msg = await gmail.users.messages.get({
-  userId:'me',
-  id:messageId
-});
+    const body = getBody(msg.data.payload);
+    const items = parseItems(body);
 
-const body = getBody(msg.data.payload);
+    // basic extraction placeholders (you’ll refine later)
+    let customer = "UNKNOWN";
+    let orderType = "UNKNOWN";
 
-const items = parseItems(body);
+    const nameMatch = body.match(/Customer:\s*(.+)/i);
+    if (nameMatch) customer = nameMatch[1].trim();
 
-// CUSTOMER NAME
-let customer = "UNKNOWN";
-let orderType = "UNKNOWN";
+    if (/pickup/i.test(body)) orderType = "PICKUP";
+    if (/delivery/i.test(body)) orderType = "DELIVERY";
 
-const nameMatch = body.match(/Customer:\s(.+)/i);
-if(nameMatch) customer = nameMatch[1];
+    // Push print job into queue
+    jobs.push(buildReceipt(customer, orderType, items));
 
-// ORDER TYPE
-if(body.includes("Pickup")) orderType = "PICKUP";
-if(body.includes("Delivery")) orderType = "DELIVERY";
+    // Mark email read so it won't re-trigger
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] },
+    });
 
+    // Optional (recommended): also remove AUTO_PRINT to avoid accidental reprocessing later
+    // await gmail.users.messages.modify({
+    //   userId: "me",
+    //   id: messageId,
+    //   requestBody: { removeLabelIds: ["AUTO_PRINT", "UNREAD"] },
+    // });
 
-jobs.push(
-  buildReceipt(customer, orderType, items)
-);
-
-  await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: {
-      removeLabelIds: ['UNREAD']
-    }
-  });
-
-
-    }
-
-  } catch(e) {
+  } catch (e) {
     console.log("GMAIL ERROR:", e.message);
   }
-
 }
 
-// TEST route to manually create job
-app.get('/createjob', (req, res) => {
-
-  jobs.push(Buffer.from([
-    0x1b, 0x40,
-    0x1b, 0x61, 0x01,
-    0x1b, 0x21, 0x30,
-    0x48, 0x6f, 0x77, 0x61, 0x72,
-    0x64, 0x27, 0x73, 0x20, 0x44,
-    0x6f, 0x6e, 0x75, 0x74, 0x73,
-    0x0a,
-    0x0a,
-    0x1b, 0x64, 0x03,
-    0x1d, 0x56, 0x00
-  ]);
+// --------------------
+// TEST ROUTE
+// --------------------
+app.get("/createjob", (req, res) => {
+  // Fixed syntax: Buffer.from([...]) then push, then close properly
+  jobs.push(
+    Buffer.from([
+      0x1b, 0x40,
+      0x1b, 0x61, 0x01,
+      0x1b, 0x21, 0x30,
+      0x48, 0x6f, 0x77, 0x61, 0x72,
+      0x64, 0x27, 0x73, 0x20, 0x44,
+      0x6f, 0x6e, 0x75, 0x74, 0x73,
+      0x0a, 0x0a,
+      0x1b, 0x64, 0x03,
+      0x1d, 0x56, 0x00,
+    ])
+  );
 
   console.log("JOB CREATED");
   res.send("Job created");
 });
 
-app.post('/starcloudprnt',(req,res)=>{
-
+// --------------------
+// STAR CLOUDPRNT ENDPOINTS
+// --------------------
+app.post("/starcloudprnt", (req, res) => {
   console.log("PRINTER POLLED");
 
-  res.setHeader("Content-Type","application/json");
-
+  res.setHeader("Content-Type", "application/json");
   res.send({
     jobReady: jobs.length > 0,
-    mediaTypes:["application/vnd.star.starprnt"],
-    jobToken:"12345"
+    mediaTypes: ["application/vnd.star.starprnt"],
+    jobToken: "12345",
   });
-
 });
 
+app.get("/starcloudprnt", (req, res) => {
+  if (jobs.length > 0) {
+    console.log("PRINTER REQUESTED JOB");
 
-// Printer downloads job here
-app.get('/starcloudprnt',(req,res)=>{
-
-if(jobs.length > 0){
-
-  const nextJob = jobs.shift();
-
-  res.setHeader("Content-Type","application/vnd.star.starprnt");
-  res.send(nextJob);
-
-}else{
-
-  res.status(204).send();
-
-}
-
+    const nextJob = jobs.shift();
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.send(nextJob);
+  } else {
+    res.status(204).send();
+  }
 });
 
+// --------------------
+// LOOP
+// --------------------
 setInterval(checkEmail, 5000);
 
 app.listen(process.env.PORT || 3000, () => {
