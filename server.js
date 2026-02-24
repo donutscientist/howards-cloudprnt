@@ -110,15 +110,16 @@ function buildReceipt(customer, orderType, items) {
   // header
   buffers.push(Buffer.from("\nNEW ORDER\n\n", "ascii"));
 
+  
   // CUSTOMER (highlight on/off)
-  buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
   buffers.push(Buffer.from(String(customer) + "\n", "ascii"));
-  buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
 
   // ORDER TYPE (highlight on/off)
-  buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
   buffers.push(Buffer.from(String(orderType) + "\n\n", "ascii"));
-  buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
 
   // items + modifiers
   for (const order of items) {
@@ -126,9 +127,9 @@ function buildReceipt(customer, orderType, items) {
 
     for (const mod of order.modifiers) {
       // modifier highlighted + indented
-      buffers.push(Buffer.from([0x1d, 0x42, 0x01]));
-      buffers.push(Buffer.from("   " + mod + "\n", "ascii"));
-      buffers.push(Buffer.from([0x1d, 0x42, 0x00]));
+      buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
+buffers.push(Buffer.from("   " + mod + "\n","ascii"));
+buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
     }
   }
 
