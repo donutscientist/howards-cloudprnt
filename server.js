@@ -124,7 +124,7 @@ function buildReceipt(customer, orderType, items) {
 buffers.push(Buffer.from([0x1B,0x34])); // INVERT ON
 buffers.push(Buffer.from("   " + mod + "\n","ascii"));
 buffers.push(Buffer.from([0x1B,0x35])); // INVERT OFF
-    }
+    }}
   // footer
   buffers.push(Buffer.from("\n", "ascii"));
   buffers.push(Buffer.from([0x1b, 0x64, 0x03])); // feed 3
