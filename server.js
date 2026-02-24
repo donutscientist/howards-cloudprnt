@@ -120,8 +120,8 @@ if(nameMatch) customer = nameMatch[1];
 if(body.includes("Pickup")) orderType = "PICKUP";
 if(body.includes("Delivery")) orderType = "DELIVERY";
 
-const receipt =
-`-----------------------
+const receipt = `
+-----------------------
 NEW ORDER
 
 \x1b\x42\x01${customer}\x1b\x42\x00
@@ -136,7 +136,7 @@ ${items}
 jobs.push(
   Buffer.concat([
     Buffer.from([0x1b,0x40]),
-    Buffer.from(receipt,'binary'),
+    Buffer.from(receipt),
     Buffer.from([0x1b,0x64,0x03]),
     Buffer.from([0x1d,0x56,0x00])
   ])
