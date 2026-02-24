@@ -133,12 +133,14 @@ ${items}
 -----------------------
 `;
 
-jobs.push(Buffer.from([
-  0x1b,0x40,
-  ...Buffer.from(receipt),
-  0x1b,0x64,0x03,
-  0x1d,0x56,0x00
-]));
+jobs.push(
+  Buffer.concat([
+    Buffer.from([0x1b,0x40]),
+    Buffer.from(receipt,'binary'),
+    Buffer.from([0x1b,0x64,0x03]),
+    Buffer.from([0x1d,0x56,0x00])
+  ])
+);
 
   await gmail.users.messages.modify({
     userId: 'me',
