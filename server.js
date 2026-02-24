@@ -42,8 +42,8 @@ function parseItems(body){
 
   const lines = body.split("\n");
 
-  let output = "";
-  let currentItem = "";
+  let output = [];
+  let currentItem = null;
 
   for(let line of lines){
 
@@ -52,37 +52,68 @@ function parseItems(body){
     // ITEM like "2x Chocolate Donut"
     if(line.match(/^\d+x\s/)){
 
-      if(currentItem){
-        output += currentItem + "\n";
-      }
+      currentItem = {
+        item: line,
+        modifiers:[]
+      };
 
-      // KEEP FORMAT: 2x Chocolate Donut
-      currentItem = line;
+      output.push(currentItem);
     }
 
     // MODIFIER like "+ Extra Glaze"
-    else if(line.startsWith("+")){
+    else if(line.startsWith("+") && currentItem){
 
       let mod = line.replace("+","").trim();
 
-      // force qty if missing
       if(!mod.match(/^\d+x\s/)){
         mod = "1x " + mod;
       }
 
-      // 🔥 highlight EVERY modifier + INDENT
-      currentItem += "\n   \x1b\x34" + mod + "\x1b\x35";
+      currentItem.modifiers.push(mod);
     }
-
-  }
-
-  if(currentItem){
-    output += currentItem + "\n";
   }
 
   return output;
 }
+function buildReceipt(customer, orderType, items){
 
+  let buffers = [];
+
+  buffers.push(Buffer.from([0x1b,0x40])); // init
+
+  buffers.push(Buffer.from("\nNEW ORDER\n\n"));
+
+  // CUSTOMER HIGHLIGHT
+  buffers.push(Buffer.from([0x1d,0x42,0x01]));
+  buffers.push(Buffer.from(customer + "\n"));
+  buffers.push(Buffer.from([0x1d,0x42,0x00]));
+
+  // ORDER TYPE HIGHLIGHT
+  buffers.push(Buffer.from([0x1d,0x42,0x01]));
+  buffers.push(Buffer.from(orderType + "\n\n"));
+  buffers.push(Buffer.from([0x1d,0x42,0x00]));
+
+  for(let order of items){
+
+    // ITEM NORMAL
+    buffers.push(Buffer.from(order.item + "\n"));
+
+    for(let mod of order.modifiers){
+
+      // MODIFIER HIGHLIGHT + INDENT
+      buffers.push(Buffer.from([0x1d,0x42,0x01]));
+      buffers.push(Buffer.from("   " + mod + "\n"));
+      buffers.push(Buffer.from([0x1d,0x42,0x00]));
+    }
+
+  }
+
+  buffers.push(Buffer.from("\n\n"));
+  buffers.push(Buffer.from([0x1b,0x64,0x03]));
+  buffers.push(Buffer.from([0x1d,0x56,0x00]));
+
+  return Buffer.concat(buffers);
+}
 async function checkEmail() {
 
   try {
@@ -120,26 +151,9 @@ if(nameMatch) customer = nameMatch[1];
 if(body.includes("Pickup")) orderType = "PICKUP";
 if(body.includes("Delivery")) orderType = "DELIVERY";
 
-const receipt = `
------------------------
-NEW ORDER
-
-\x1b\x42\x01${customer}\x1b\x42\x00
-
-\x1b\x42\x01${orderType}\x1b\x42\x00
-
-${items}
-
------------------------
-`;
 
 jobs.push(
-  Buffer.concat([
-    Buffer.from([0x1b,0x40]),
-    Buffer.from(receipt),
-    Buffer.from([0x1b,0x64,0x03]),
-    Buffer.from([0x1d,0x56,0x00])
-  ])
+  buildReceipt(customer, orderType, items)
 );
 
   await gmail.users.messages.modify({
