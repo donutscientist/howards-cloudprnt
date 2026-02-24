@@ -104,12 +104,6 @@ function parseItems(body) {
 function buildReceipt(customer, orderType, items) {
   const buffers = [];
 
-  // init
-  buffers.push(Buffer.from([0x1b, 0x40]));
-
-  // header
-  buffers.push(Buffer.from("\nNEW ORDER\n\n", "ascii"));
-
   
   // CUSTOMER (highlight on/off)
   buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
@@ -126,10 +120,15 @@ function buildReceipt(customer, orderType, items) {
     buffers.push(Buffer.from(order.item + "\n", "ascii"));
 
     for (const mod of order.modifiers) {
-      // modifier highlighted + indented
-      buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
-buffers.push(Buffer.from("   " + mod + "\n","ascii"));
-buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
+     // MODIFIER EMPHASIS ON
+buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
+buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
+
+buffers.push(Buffer.from("   > " + mod + " <\n","ascii"));
+
+// RESET
+buffers.push(Buffer.from([0x1B,0x45,0x00]));
+buffers.push(Buffer.from([0x1B,0x21,0x00]));
     }
   }
 
