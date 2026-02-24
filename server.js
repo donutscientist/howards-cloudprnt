@@ -121,16 +121,9 @@ function buildReceipt(customer, orderType, items) {
 
     for (const mod of order.modifiers) {
      // MODIFIER EMPHASIS ON
-buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
-buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
-
-buffers.push(Buffer.from("   > " + mod + " <\n","ascii"));
-
-// RESET
-buffers.push(Buffer.from([0x1B,0x45,0x00]));
-buffers.push(Buffer.from([0x1B,0x21,0x00]));
-    }
-  }
+buffers.push(Buffer.from([0x1B,0x34])); // INVERT ON
+buffers.push(Buffer.from("   " + mod + "\n","ascii"));
+buffers.push(Buffer.from([0x1B,0x35])); // INVERT OFF
 
   // footer
   buffers.push(Buffer.from("\n", "ascii"));
