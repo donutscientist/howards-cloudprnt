@@ -1,5 +1,4 @@
-let job = null;
-let jobSent = false;
+let jobs = [];
 
 const { google } = require('googleapis');
 
@@ -72,7 +71,7 @@ function parseItems(body){
       }
 
       // 🔥 highlight EVERY modifier + INDENT
-      currentItem += "\n   \x1d\x42\x01" + mod + "\x1d\x42\x00";
+      currentItem += "\n   \x1b\x34" + mod + "\x1b\x35";
     }
 
   }
@@ -95,7 +94,7 @@ async function checkEmail() {
     });
     
 
-if (res.data.messages && !job) {
+if (res.data.messages) {
 
   console.log("EMAIL FOUND - CREATING JOB");
 
@@ -134,14 +133,12 @@ ${items}
 -----------------------
 `;
 
-job = Buffer.from([
+jobs.push(Buffer.from([
   0x1b,0x40,
   ...Buffer.from(receipt),
   0x1b,0x64,0x03,
   0x1d,0x56,0x00
-]);
-
-jobSent = false;
+]));
 
   await gmail.users.messages.modify({
     userId: 'me',
@@ -163,7 +160,7 @@ jobSent = false;
 // TEST route to manually create job
 app.get('/createjob', (req, res) => {
 
-  job = Buffer.from([
+  jobs.push(Buffer.from([
     0x1b, 0x40,
     0x1b, 0x61, 0x01,
     0x1b, 0x21, 0x30,
@@ -187,7 +184,7 @@ app.post('/starcloudprnt',(req,res)=>{
   res.setHeader("Content-Type","application/json");
 
   res.send({
-    jobReady: job !== null && !jobSent,
+    jobReady: jobs.length > 0,
     mediaTypes:["application/vnd.star.starprnt"],
     jobToken:"12345"
   });
@@ -198,20 +195,18 @@ app.post('/starcloudprnt',(req,res)=>{
 // Printer downloads job here
 app.get('/starcloudprnt',(req,res)=>{
 
-  if(job && !jobSent){
+if(jobs.length > 0){
 
-    console.log("PRINTER REQUESTED JOB");
+  const nextJob = jobs.shift();
 
-    jobSent = true;
+  res.setHeader("Content-Type","application/vnd.star.starprnt");
+  res.send(nextJob);
 
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
-    res.send(job);
+}else{
 
-  }else{
+  res.status(204).send();
 
-    res.status(204).send();
-
-  }
+}
 
 });
 
