@@ -107,21 +107,18 @@ function buildReceipt(customer, orderType, items) {
   buffers.push(Buffer.from([0x1B,0x40])); // ESC @
 
   // --------------------
-  // LARGE CUSTOMER NAME
-  // double width + double height
+  // BOLD CUSTOMER NAME
   // --------------------
-  buffers.push(Buffer.from([0x1B,0x21,0x30])); // size = 2x
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(customer));         // UTF-8 SAFE
+  buffers.push(Buffer.from(" " + customer)); 
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
-  buffers.push(Buffer.from([0x1B,0x21,0x00])); // reset size
   buffers.push(Buffer.from("\n"));
 
   // --------------------
   // ORDER TYPE (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(orderType));
+  buffers.push(Buffer.from(" " + orderType));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
   buffers.push(Buffer.from("\n\n"));
 
