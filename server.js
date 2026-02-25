@@ -230,7 +230,7 @@ function buildReceipt(customer, orderType, items) {
     buffers.push(Buffer.from([0x1B,0x45,0x01]));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
-    buffers.push(Buffer.from(order.item + "\n"));
+    buffers.push(Buffer.from(currentItem + "\n"));
     buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
     buffers.push(Buffer.from([0x1B,0x21,0x00]));
     // MODIFIERS (NORMAL)
