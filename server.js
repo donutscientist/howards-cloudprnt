@@ -103,7 +103,8 @@ function buildReceipt(customer, orderType, items) {
 
   // INIT PRINTER
   buffers.push(Buffer.from([0x1B,0x40]));
-
+      // 1 SPACE INDENT (NOT INVERTED)
+      buffers.push(Buffer.from(" ","ascii"));
   // --------------------
   // CUSTOMER (INVERTED)
   // --------------------
@@ -111,7 +112,8 @@ function buildReceipt(customer, orderType, items) {
   buffers.push(Buffer.from(customer,"ascii"));   // TEXT
   buffers.push(Buffer.from([0x1B,0x35]));        // INVERT OFF
   buffers.push(Buffer.from("\n","ascii"));
-
+      // 1 SPACE INDENT (NOT INVERTED)
+      buffers.push(Buffer.from(" ","ascii"));
   // --------------------
   // ORDER TYPE (INVERTED)
   // --------------------
@@ -124,7 +126,8 @@ function buildReceipt(customer, orderType, items) {
   // ITEMS + MODIFIERS
   // --------------------
   for (const order of items) {
-
+      // 1 SPACE INDENT (NOT INVERTED)
+      buffers.push(Buffer.from(" ","ascii"));
     // ITEM NORMAL
     buffers.push(Buffer.from(order.item + "\n","ascii"));
 
@@ -132,11 +135,11 @@ function buildReceipt(customer, orderType, items) {
 
 
       // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from("   ","ascii"));
+      buffers.push(Buffer.from("    ","ascii"));
 
       // MODIFIER INVERTED FROM TEXT ONLY
       buffers.push(Buffer.from([0x1B,0x34])); // INVERT ON
-buffers.push(Buffer.from("   " + mod + "\n","ascii"));
+buffers.push(Buffer.from(" " + mod + "\n","ascii"));
 buffers.push(Buffer.from([0x1B,0x35])); // INVERT OFF
     }
   }
