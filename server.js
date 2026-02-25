@@ -117,7 +117,9 @@ function buildReceipt(customer, orderType, items) {
   // --------------------
   // ORDER TYPE (BOLD)
   // --------------------
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
   buffers.push(Buffer.from(orderType,"ascii"));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
   buffers.push(Buffer.from("\n\n","ascii"));
 
   // --------------------
