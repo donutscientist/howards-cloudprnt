@@ -36,7 +36,13 @@ function getBody(payload) {
       if (part.mimeType === "text/html" && part.body?.data) {
         return Buffer.from(part.body.data, "base64")
           .toString("utf8")
-          .replace(/<[^>]+>/g, "");
+.replace(/<\/div>/gi,"\n")
+.replace(/<\/li>/gi,"\n")
+.replace(/<br\s*\/?>/gi,"\n")
+.replace(/<\/tr>/gi,"\n")
+.replace(/<\/p>/gi,"\n")
+.replace(/&nbsp;/gi," ")
+.replace(/<[^>]+>/g,"")
       }
 
       // Sometimes payload is nested (parts inside parts)
