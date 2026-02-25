@@ -340,7 +340,7 @@ if(platform==="GH" && totalItems)
     //   requestBody: { removeLabelIds: ["AUTO_PRINT", "UNREAD"] },
     // });
 
-  } catch (e) {
+  catch (e) {
     console.log("GMAIL ERROR:", e.message);
   }
 }
