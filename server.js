@@ -87,64 +87,86 @@ function parseItems(body) {
 
 function parseGrubHub(body){
 
-  const lines = body.split("\n");
+  let customer = "UNKNOWN";
+  let orderType = "GrubHub Pickup";
+  let totalItems = "0";
 
+  // --------------------
+  // NAME + TYPE
+  // --------------------
+  let deliverMatch = body.match(/Deliver to:\s*(.+)/i);
+  let pickupMatch  = body.match(/Pickup by:\s*(.+)/i);
+
+  if(deliverMatch){
+    customer = deliverMatch[1].trim();
+    orderType = "GrubHub Delivery";
+  }
+  else if(pickupMatch){
+    customer = pickupMatch[1].trim();
+    orderType = "GrubHub Pickup";
+  }
+
+  // --------------------
+  // TOTAL ITEMS
+  // --------------------
+  let totalMatch = body.match(/(\d+)\s*items?/i);
+  if(totalMatch)
+    totalItems = totalMatch[1];
+
+  // --------------------
+  // ITEMS + MODIFIERS
+  // --------------------
+  let lines = body.split("\n");
   let items = [];
   let currentItem = null;
 
-  for(let line of lines){
+  for(let raw of lines){
 
-    line = line.trim();
+    let line = raw.trim();
 
-    // ITEM: 1 x Custom Dozen     $18.37
-    if(/^\d+\s*x\s+.*\$\d+/.test(line)){
+    // ITEM → 2 x Kolache
+    let itemMatch = line.match(/^(\d+)\s*x\s*(.+)$/i);
 
-      let match = line.match(/^(\d+)\s*x\s+(.*?)\s+\$/);
-
-      if(match){
-        currentItem = {
-          item: `${match[1]}x ${match[2]}`,
-          modifiers:[]
-        };
-        items.push(currentItem);
-      }
-
+    if(itemMatch){
+      currentItem = {
+        item: itemMatch[1] + "x " + itemMatch[2].trim(),
+        modifiers:[]
+      };
+      items.push(currentItem);
       continue;
     }
 
-    // MODIFIER starts after ▪️
+    // MODIFIER → ▪️ Coconut
     if(line.includes("▪️") && currentItem){
-
       let mod = line.split("▪️")[1].trim();
-
       currentItem.modifiers.push(mod);
     }
   }
 
-  // ---- COUNT MODIFIER QTY ----
+  // --------------------
+  // GROUP + SORT MODS
+  // --------------------
   for(let order of items){
 
-    let count = {};
+    let counter = {};
 
-    for(let mod of order.modifiers){
-      count[mod] = (count[mod] || 0) + 1;
-    }
+    for(let m of order.modifiers)
+      counter[m] = (counter[m]||0)+1;
 
-    let finalMods = [];
-
-    Object.keys(count)
-      .sort((a,b)=>count[a]-count[b])
-      .forEach(name=>{
-        if(count[name]===1)
-          finalMods.push(name);
-        else
-          finalMods.push(`${count[name]}x ${name}`);
+    order.modifiers = Object.entries(counter)
+      .sort((a,b)=>a[1]-b[1])
+      .map(([name,qty])=>{
+        if(qty===1) return name;
+        return qty+"x "+name;
       });
-
-    order.modifiers = finalMods;
   }
 
-  return items;
+  return {
+    customer,
+    orderType,
+    totalItems,
+    items
+  };
 }
 // --------------------
 // BUILD STARPRNT JOB (Buffer)
@@ -284,42 +306,43 @@ if(platform==="GH"){
 
 }
 
-    let items = [];
+   let customer = "UNKNOWN";
+let orderType = "UNKNOWN";
+let items = [];
 
-    // -------------------------
-    // PLATFORM PARSER
-    // -------------------------
+// -------------------------
+// PLATFORM PARSER
+// -------------------------
 
-    if(platform==="GH")
-      items = parseGrubHub(body);
+if(platform==="GH"){
 
-    // future:
-    // if(platform==="DD")
-    // items = parseDoorDash(body);
+  const gh = parseGrubHub(body);
 
-    // if(platform==="UE")
-    // items = parseUber(body);
+  customer  = gh.customer;
+  orderType = gh.orderType;
 
-    // if(platform==="SQ")
-    // items = parseSquare(body);
+  items = gh.items;
 
-    // -------------------------
-    // HEADER INFO
-    // -------------------------
+  if(gh.totalItems){
+    items.unshift({
+      item:`Total items: ${gh.totalItems}`,
+      modifiers:[]
+    });
+  }
 
-    let customer="UNKNOWN";
-    let orderType="UNKNOWN";
+}else{
 
-    const nameMatch = body.match(/Customer:\s*(.+)/i);
-    if(nameMatch) customer=nameMatch[1].trim();
+  // future DD / UE / SQ
+  items = parseItems(body);
 
-    if(/pickup/i.test(body)) orderType="GrubHub Pickup";
-if(/delivery/i.test(body)) orderType="GrubHub Delivery";
+  const nameMatch = body.match(/Customer:\s*(.+)/i);
+  if(nameMatch) customer=nameMatch[1].trim();
 
-if(platform==="GH" && totalItems)
-  orderType += `\nTotal items: ${totalItems}`;
+  if(/pickup/i.test(body)) orderType="Pickup";
+  if(/delivery/i.test(body)) orderType="Delivery";
+}
 
-    jobs.push(buildReceipt(customer,orderType,items));
+jobs.push(buildReceipt(customer,orderType,items));
 
     await gmail.users.messages.modify({
       userId:"me",
