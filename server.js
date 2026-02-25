@@ -110,7 +110,7 @@ function buildReceipt(customer, orderType, items) {
   // BOLD CUSTOMER NAME
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + customer "\n")); 
+  buffers.push(Buffer.from(" " + customer + "\n")); 
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
 
   // --------------------
