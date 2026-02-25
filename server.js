@@ -82,10 +82,6 @@ function parseItems(body) {
     if (line.startsWith("+") && currentItem) {
       let mod = line.replace(/^\+\s*/, "").trim();
 
-      // if missing qty, force "1x "
-      if (!/^\d+x\s+/.test(mod)) {
-        mod = "1x " + mod;
-      }
 
       currentItem.modifiers.push(mod);
     }
@@ -134,18 +130,14 @@ function buildReceipt(customer, orderType, items) {
 
     for (let mod of order.modifiers) {
 
-      // REMOVE 1x IF QTY IS 1
-      mod = mod.replace(/^1x\s+/i,"");
 
       // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from(" ","ascii"));
+      buffers.push(Buffer.from("   ","ascii"));
 
       // MODIFIER INVERTED FROM TEXT ONLY
-      buffers.push(Buffer.from([0x1B,0x34]));    // INVERT ON
-      buffers.push(Buffer.from(mod,"ascii"));
-      buffers.push(Buffer.from([0x1B,0x35]));    // INVERT OFF
-
-      buffers.push(Buffer.from("\n","ascii"));
+      buffers.push(Buffer.from([0x1B,0x34])); // INVERT ON
+buffers.push(Buffer.from("   " + mod + "\n","ascii"));
+buffers.push(Buffer.from([0x1B,0x35])); // INVERT OFF
     }
   }
 
