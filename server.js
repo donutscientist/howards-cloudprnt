@@ -55,12 +55,7 @@ function getBody(payload) {
   return "";
 }
 
-// --------------------
-// PARSE ITEMS + MODIFIERS
-// - Item line: "2x Chocolate Donut"
-// - Modifier line: "+ Extra Glaze" or "+ 2x Sprinkles"
-// Output: [{ item: "2x ...", modifiers: ["1x ...", "2x ..."] }]
-// --------------------
+
 function parseItems(body) {
   const lines = body.split("\n");
 
@@ -90,6 +85,67 @@ function parseItems(body) {
   return output;
 }
 
+function parseGrubHub(body){
+
+  const lines = body.split("\n");
+
+  let items = [];
+  let currentItem = null;
+
+  for(let line of lines){
+
+    line = line.trim();
+
+    // ITEM: 1 x Custom Dozen     $18.37
+    if(/^\d+\s*x\s+.*\$\d+/.test(line)){
+
+      let match = line.match(/^(\d+)\s*x\s+(.*?)\s+\$/);
+
+      if(match){
+        currentItem = {
+          item: `${match[1]}x ${match[2]}`,
+          modifiers:[]
+        };
+        items.push(currentItem);
+      }
+
+      continue;
+    }
+
+    // MODIFIER starts after ▪️
+    if(line.includes("▪️") && currentItem){
+
+      let mod = line.split("▪️")[1].trim();
+
+      currentItem.modifiers.push(mod);
+    }
+  }
+
+  // ---- COUNT MODIFIER QTY ----
+  for(let order of items){
+
+    let count = {};
+
+    for(let mod of order.modifiers){
+      count[mod] = (count[mod] || 0) + 1;
+    }
+
+    let finalMods = [];
+
+    Object.keys(count)
+      .sort((a,b)=>count[a]-count[b])
+      .forEach(name=>{
+        if(count[name]===1)
+          finalMods.push(name);
+        else
+          finalMods.push(`${count[name]}x ${name}`);
+      });
+
+    order.modifiers = finalMods;
+  }
+
+  return items;
+}
 // --------------------
 // BUILD STARPRNT JOB (Buffer)
 // Uses "highlight" (inverted) for:
@@ -152,48 +208,130 @@ function buildReceipt(customer, orderType, items) {
 // --------------------
 // CHECK EMAIL
 // --------------------
-async function checkEmail() {
-  try {
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      q: "is:unread label:AUTO_PRINT",
-      maxResults: 1,
+async function checkEmail(){
+
+  try{
+
+    // -------------------------
+    // CHECK LABELS
+    // -------------------------
+
+    const gh = await gmail.users.messages.list({
+      userId:"me",
+      q:"is:unread label:GH_PRINT",
+      maxResults:1
     });
 
-    if (!res.data.messages || res.data.messages.length === 0) return;
+    const dd = await gmail.users.messages.list({
+      userId:"me",
+      q:"is:unread label:DD_PRINT",
+      maxResults:1
+    });
 
-    const messageId = res.data.messages[0].id;
-    console.log("EMAIL FOUND - CREATING JOB:", messageId);
+    const ue = await gmail.users.messages.list({
+      userId:"me",
+      q:"is:unread label:UE_PRINT",
+      maxResults:1
+    });
 
-    // Fetch message
+    const sq = await gmail.users.messages.list({
+      userId:"me",
+      q:"is:unread label:SQ_PRINT",
+      maxResults:1
+    });
+
+    let messageId = null;
+    let platform = null;
+
+    if(gh.data.messages){
+      messageId = gh.data.messages[0].id;
+      platform = "GH";
+    }
+    else if(dd.data.messages){
+      messageId = dd.data.messages[0].id;
+      platform = "DD";
+    }
+    else if(ue.data.messages){
+      messageId = ue.data.messages[0].id;
+      platform = "UE";
+    }
+    else if(sq.data.messages){
+      messageId = sq.data.messages[0].id;
+      platform = "SQ";
+    }
+
+    if(!messageId) return;
+
+    console.log("EMAIL FOUND:",platform);
+
     const msg = await gmail.users.messages.get({
-      userId: "me",
-      id: messageId,
-      format: "full",
+      userId:"me",
+      id:messageId,
+      format:"full"
     });
 
     const body = getBody(msg.data.payload);
-    const items = parseItems(body);
+    let totalItems = "";
 
-    // basic extraction placeholders (you’ll refine later)
-    let customer = "UNKNOWN";
-    let orderType = "UNKNOWN";
+if(platform==="GH"){
+
+  const totalMatch =
+    body.match(/Total items:\s*(\d+)/i) ||
+    body.match(/\b(\d+)\s+items\b/i);
+
+  if(totalMatch)
+    totalItems = totalMatch[1];
+
+}
+
+    let items = [];
+
+    // -------------------------
+    // PLATFORM PARSER
+    // -------------------------
+
+    if(platform==="GH")
+      items = parseGrubHub(body);
+
+    // future:
+    // if(platform==="DD")
+    // items = parseDoorDash(body);
+
+    // if(platform==="UE")
+    // items = parseUber(body);
+
+    // if(platform==="SQ")
+    // items = parseSquare(body);
+
+    // -------------------------
+    // HEADER INFO
+    // -------------------------
+
+    let customer="UNKNOWN";
+    let orderType="UNKNOWN";
 
     const nameMatch = body.match(/Customer:\s*(.+)/i);
-    if (nameMatch) customer = nameMatch[1].trim();
+    if(nameMatch) customer=nameMatch[1].trim();
 
-    if (/pickup/i.test(body)) orderType = "PICKUP";
-    if (/delivery/i.test(body)) orderType = "DELIVERY";
+    if(/pickup/i.test(body)) orderType="GrubHub Pickup";
+if(/delivery/i.test(body)) orderType="GrubHub Delivery";
 
-    // Push print job into queue
-    jobs.push(buildReceipt(customer, orderType, items));
+if(platform==="GH" && totalItems)
+  orderType += `\nTotal items: ${totalItems}`;
 
-    // Mark email read so it won't re-trigger
+    jobs.push(buildReceipt(customer,orderType,items));
+
     await gmail.users.messages.modify({
-      userId: "me",
-      id: messageId,
-      requestBody: { removeLabelIds: ["UNREAD"] },
+      userId:"me",
+      id:messageId,
+      requestBody:{ removeLabelIds:["UNREAD"] }
     });
+
+  }catch(e){
+    console.log("GMAIL ERROR:",e.message);
+  }
+
+}
 
     // Optional (recommended): also remove AUTO_PRINT to avoid accidental reprocessing later
     // await gmail.users.messages.modify({
