@@ -108,18 +108,24 @@ function buildReceipt(customer, orderType, items) {
   // --------------------
   // CUSTOMER (INVERTED)
   // --------------------
-  buffers.push(Buffer.from([0x1B,0x34]));        // INVERT ON
-  buffers.push(Buffer.from(customer,"ascii"));   // TEXT
-  buffers.push(Buffer.from([0x1B,0x35]));        // INVERT OFF
-  buffers.push(Buffer.from("\n","ascii"));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
+buffers.push(Buffer.from(customer,"ascii"));
+buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
+     // EMPHASIS ON
+buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
+buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
+  buffers.push(Buffer.from("\n\n","ascii"));
       // 1 SPACE INDENT (NOT INVERTED)
       buffers.push(Buffer.from(" ","ascii"));
   // --------------------
   // ORDER TYPE (INVERTED)
   // --------------------
-  buffers.push(Buffer.from([0x1B,0x34]));
-  buffers.push(Buffer.from(orderType,"ascii"));
-  buffers.push(Buffer.from([0x1B,0x35]));
+   buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
+buffers.push(Buffer.from(orderType,"ascii"));
+buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
+     // EMPHASIS ON
+buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
+buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
   buffers.push(Buffer.from("\n\n","ascii"));
 
   // --------------------
@@ -138,9 +144,12 @@ function buildReceipt(customer, orderType, items) {
       buffers.push(Buffer.from("    ","ascii"));
 
       // MODIFIER INVERTED FROM TEXT ONLY
-      buffers.push(Buffer.from([0x1B,0x34])); // INVERT ON
-buffers.push(Buffer.from(" " + mod + "\n","ascii"));
-buffers.push(Buffer.from([0x1B,0x35])); // INVERT OFF
+       buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
+buffers.push(Buffer.from(mod + "\n","ascii"));
+buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
+     // MODIFIER EMPHASIS ON
+buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
+buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
     }
   }
 
