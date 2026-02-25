@@ -119,7 +119,6 @@ function parseGrubHub(body){
   // --------------------
   let deliverMatch = body.match(/Deliver to:\s*(.+)/i);
   let pickupMatch  = body.match(/Pickup by:\s*(.+)/i);
-
   if(deliverMatch){
     customer = deliverMatch[1].trim();
     orderType = "GrubHub Delivery";
@@ -160,8 +159,8 @@ function parseGrubHub(body){
     }
 
     // MODIFIER → ▪️ Coconut
-    if(line.includes("▪️") && currentItem){
-      let mod = line.split("▪️")[1].trim();
+    if(line.includes("•") && currentItem){
+      let mod = line.split("•")[1].trim();
       currentItem.modifiers.push(mod);
     }
   }
@@ -343,12 +342,11 @@ if(platform==="GH"){
 
   customer  = gh.customer;
   orderType = gh.orderType;
-
   items = gh.items;
 
   if(gh.totalItems){
     items.unshift({
-      item:`Total items: ${gh.totalItems}`,
+      item:`Total Items: ${gh.totalItems}`,
       modifiers:[]
     });
   }
