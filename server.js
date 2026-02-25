@@ -197,7 +197,7 @@ function parseGrubHub(body){
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, items) {
+function buildReceipt(customer, orderType, currentItem) {
 
   const buffers = [];
 
