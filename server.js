@@ -84,45 +84,57 @@ function buildReceipt(customer, orderType, items) {
 
   const buffers = [];
 
-  buffers.push(Buffer.from([0x1b,0x40])); // init
+  // INIT PRINTER
+  buffers.push(Buffer.from([0x1B,0x40]));
 
-  // CUSTOMER HIGHLIGHT
+  // --------------------
+  // CUSTOMER (INVERTED)
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x34]));        // INVERT ON
+  buffers.push(Buffer.from(customer,"ascii"));   // TEXT
+  buffers.push(Buffer.from([0x1B,0x35]));        // INVERT OFF
+  buffers.push(Buffer.from("\n","ascii"));
+
+  // --------------------
+  // ORDER TYPE (INVERTED)
+  // --------------------
   buffers.push(Buffer.from([0x1B,0x34]));
-  buffers.push(Buffer.from(String(customer), "ascii"));
+  buffers.push(Buffer.from(orderType,"ascii"));
   buffers.push(Buffer.from([0x1B,0x35]));
-  buffers.push(Buffer.from("\n"));
+  buffers.push(Buffer.from("\n\n","ascii"));
 
-  // ORDER TYPE HIGHLIGHT
-  buffers.push(Buffer.from([0x1B,0x34]));
-  buffers.push(Buffer.from(String(orderType), "ascii"));
-  buffers.push(Buffer.from([0x1B,0x35]));
-  buffers.push(Buffer.from("\n\n"));
-
+  // --------------------
+  // ITEMS + MODIFIERS
+  // --------------------
   for (const order of items) {
 
+    // ITEM NORMAL
     buffers.push(Buffer.from(order.item + "\n","ascii"));
 
-    for (const mod of order.modifiers) {
+    for (let mod of order.modifiers) {
 
-      // 1 SPACE LEFT INDENT
-      buffers.push(Buffer.from(" ", "ascii"));
+      // REMOVE 1x IF QTY IS 1
+      mod = mod.replace(/^1x\s+/i,"");
 
-      // START INVERT FROM TEXT ONLY
-      buffers.push(Buffer.from([0x1B,0x34]));
-      buffers.push(Buffer.from(mod, "ascii"));
-      buffers.push(Buffer.from([0x1B,0x35]));
+      // 1 SPACE INDENT (NOT INVERTED)
+      buffers.push(Buffer.from(" ","ascii"));
+
+      // MODIFIER INVERTED FROM TEXT ONLY
+      buffers.push(Buffer.from([0x1B,0x34]));    // INVERT ON
+      buffers.push(Buffer.from(mod,"ascii"));
+      buffers.push(Buffer.from([0x1B,0x35]));    // INVERT OFF
 
       buffers.push(Buffer.from("\n","ascii"));
     }
   }
 
-  buffers.push(Buffer.from("\n"));
-  buffers.push(Buffer.from([0x1b,0x64,0x03]));
-  buffers.push(Buffer.from([0x1d,0x56,0x00]));
+  // FEED + CUT
+  buffers.push(Buffer.from("\n","ascii"));
+  buffers.push(Buffer.from([0x1B,0x64,0x03]));
+  buffers.push(Buffer.from([0x1D,0x56,0x00]));
 
   return Buffer.concat(buffers);
 }
-
 // --------------------
 // CHECK EMAIL
 // --------------------
