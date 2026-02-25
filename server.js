@@ -26,60 +26,46 @@ const gmail = google.gmail({ version: "v1", auth });
 // --------------------
 // EMAIL BODY EXTRACT
 // --------------------
+function decodeBase64Url(data){
+  return Buffer.from(
+    data
+      .replace(/-/g,'+')
+      .replace(/_/g,'/')
+      .padEnd(data.length + (4 - data.length % 4) % 4,'='),
+    'base64'
+  ).toString('utf8');
+}
+
 function getBody(payload){
 
-  function walk(parts){
+  if(payload.parts && Array.isArray(payload.parts)){
 
-    for(const part of parts){
+    for(const part of payload.parts){
 
-      if(part.mimeType === "text/html" && part.body?.data){
+      if(part.mimeType==="text/plain" && part.body?.data)
+        return decodeBase64Url(part.body.data);
 
-        return Buffer.from(
-  part.body.data
-    .replace(/-/g,"+")
-    .replace(/_/g,"/")
-    .padEnd(part.body.data.length + (4 - part.body.data.length % 4) % 4, "="),
-  "base64"
-)
-          .toString("utf8")
-          .replace(/<\/div>/gi,"\n")
-          .replace(/<\/li>/gi,"\n")
-          .replace(/<br\s*\/?>/gi,"\n")
-          .replace(/<\/tr>/gi,"\n")
-          .replace(/<\/p>/gi,"\n")
-          .replace(/&nbsp;/gi," ")
-          .replace(/<[^>]+>/g,"");
-      }
+      if(part.mimeType==="text/html" && part.body?.data)
+        return decodeBase64Url(part.body.data)
+          .replace(/<style[\s\S]*?<\/style>/gi,'')
+          .replace(/<script[\s\S]*?<\/script>/gi,'')
+          .replace(/<[^>]+>/g,'')
+          .replace(/&nbsp;/g,' ')
+          .replace(/\s+/g,' ')
+          .trim();
 
       if(part.parts){
-        const found = walk(part.parts);
-        if(found) return found;
+        const nested = getBody(part);
+        if(nested) return nested;
       }
-
     }
-
-    return null;
   }
 
-  if(payload.parts){
-    const result = walk(payload.parts);
-    if(result) return result;
-  }
-
-  if(payload.body?.data){
-    return Buffer.from(
-  part.body.data
-    .replace(/-/g,"+")
-    .replace(/_/g,"/")
-    .padEnd(part.body.data.length + (4 - part.body.data.length % 4) % 4, "="),
-  "base64"
-)
-      .toString("utf8");
-  }
+  if(payload.body?.data)
+    return decodeBase64Url(payload.body.data);
 
   return "";
 }
-
 
 function parseItems(body) {
   const lines = body.split("\n");
