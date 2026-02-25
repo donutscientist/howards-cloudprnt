@@ -1,3 +1,4 @@
+const { convert } = require("html-to-text");
 const express = require("express");
 const { google } = require("googleapis");
 
@@ -38,33 +39,44 @@ function decodeBase64Url(data){
 
 function getBody(payload){
 
-  if(payload.parts && Array.isArray(payload.parts)){
+  function walk(part){
 
-    for(const part of payload.parts){
+    if(!part) return "";
 
-      if(part.mimeType==="text/plain" && part.body?.data)
-        return decodeBase64Url(part.body.data);
+    // TEXT/PLAIN
+    if(part.mimeType==="text/plain" && part.body?.data){
+      return Buffer
+        .from(part.body.data,"base64")
+        .toString("utf8");
+    }
 
-      if(part.mimeType==="text/html" && part.body?.data)
-        return decodeBase64Url(part.body.data)
-          .replace(/<style[\s\S]*?<\/style>/gi,'')
-          .replace(/<script[\s\S]*?<\/script>/gi,'')
-          .replace(/<[^>]+>/g,'')
-          .replace(/&nbsp;/g,' ')
-          .replace(/\s+/g,' ')
-          .trim();
+    // TEXT/HTML → CONVERT TO PLAIN TEXT
+    if(part.mimeType==="text/html" && part.body?.data){
 
-      if(part.parts){
-        const nested = getBody(part);
-        if(nested) return nested;
+      const html = Buffer
+        .from(part.body.data,"base64")
+        .toString("utf8");
+
+      return convert(html,{
+        wordwrap:false,
+        selectors:[
+          {selector:'a',options:{ignoreHref:true}}
+        ]
+      });
+    }
+
+    // WALK CHILD PARTS
+    if(part.parts){
+      for(const p of part.parts){
+        const result = walk(p);
+        if(result) return result;
       }
     }
+
+    return "";
   }
 
-  if(payload.body?.data)
-    return decodeBase64Url(payload.body.data);
-
-  return "";
+  return walk(payload);
 }
 
 function parseItems(body) {
