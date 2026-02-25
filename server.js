@@ -110,17 +110,16 @@ function buildReceipt(customer, orderType, items) {
   // BOLD CUSTOMER NAME
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + customer)); 
+  buffers.push(Buffer.from(" " + customer "\n")); 
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
-  buffers.push(Buffer.from("\n"));
 
   // --------------------
   // ORDER TYPE (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + orderType));
+  buffers.push(Buffer.from(" " + orderType + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
-  buffers.push(Buffer.from("\n\n"));
+  buffers.push(Buffer.from("\n"));
 
   // --------------------
   // ITEMS + MODIFIERS
@@ -128,11 +127,11 @@ function buildReceipt(customer, orderType, items) {
   for (const order of items) {
 
     // ITEM (UNDERLINE ONLY)
+     buffers.push(Buffer.from("     -------" + "\n"));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
-    buffers.push(Buffer.from(order.item));
+    buffers.push(Buffer.from(order.item + "\n"));
     buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
-    buffers.push(Buffer.from("\n"));
 
     // MODIFIERS (NORMAL)
     for (let mod of order.modifiers) {
