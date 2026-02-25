@@ -34,8 +34,13 @@ function getBody(payload){
 
       if(part.mimeType === "text/html" && part.body?.data){
 
-        return Buffer
-          .from(part.body.data,"base64")
+        return Buffer.from(
+  part.body.data
+    .replace(/-/g,"+")
+    .replace(/_/g,"/")
+    .padEnd(part.body.data.length + (4 - part.body.data.length % 4) % 4, "="),
+  "base64"
+)
           .toString("utf8")
           .replace(/<\/div>/gi,"\n")
           .replace(/<\/li>/gi,"\n")
@@ -62,8 +67,13 @@ function getBody(payload){
   }
 
   if(payload.body?.data){
-    return Buffer
-      .from(payload.body.data,"base64")
+    return Buffer.from(
+  part.body.data
+    .replace(/-/g,"+")
+    .replace(/_/g,"/")
+    .padEnd(part.body.data.length + (4 - part.body.data.length % 4) % 4, "="),
+  "base64"
+)
       .toString("utf8");
   }
 
