@@ -4,6 +4,9 @@ const { google } = require("googleapis");
 const app = express();
 app.use(express.raw({ type: "*/*" }));
 
+// --------------------
+// PRINT JOB QUEUE
+// --------------------
 let jobs = [];
 
 // --------------------
@@ -24,61 +27,79 @@ const gmail = google.gmail({ version: "v1", auth });
 // EMAIL BODY EXTRACT
 // --------------------
 function getBody(payload) {
-  if (payload.parts) {
+  // Walk parts (plain/text preferred)
+  if (payload.parts && Array.isArray(payload.parts)) {
     for (const part of payload.parts) {
-      if (part.mimeType === "text/plain" && part.body?.data)
+      if (part.mimeType === "text/plain" && part.body?.data) {
         return Buffer.from(part.body.data, "base64").toString("utf8");
-
-      if (part.mimeType === "text/html" && part.body?.data)
+      }
+      if (part.mimeType === "text/html" && part.body?.data) {
         return Buffer.from(part.body.data, "base64")
           .toString("utf8")
           .replace(/<[^>]+>/g, "");
+      }
 
+      // Sometimes payload is nested (parts inside parts)
       if (part.parts) {
         const nested = getBody(part);
         if (nested) return nested;
       }
     }
   }
-  if (payload.body?.data)
+
+  // Fallback to payload.body.data
+  if (payload.body?.data) {
     return Buffer.from(payload.body.data, "base64").toString("utf8");
+  }
 
   return "";
 }
 
 // --------------------
-// PARSE ITEMS
+// PARSE ITEMS + MODIFIERS
+// - Item line: "2x Chocolate Donut"
+// - Modifier line: "+ Extra Glaze" or "+ 2x Sprinkles"
+// Output: [{ item: "2x ...", modifiers: ["1x ...", "2x ..."] }]
 // --------------------
 function parseItems(body) {
   const lines = body.split("\n");
+
   const output = [];
   let currentItem = null;
 
   for (let raw of lines) {
-    let line = raw.trim();
+    let line = (raw || "").trim();
     if (!line) continue;
 
+    // ITEM like "2x Chocolate Donut"  (no space between qty and x)
     if (/^\d+x\s+/.test(line)) {
       currentItem = { item: line, modifiers: [] };
       output.push(currentItem);
       continue;
     }
 
+    // MODIFIER like "+ Extra Glaze" or "+ 2x Sprinkles"
     if (line.startsWith("+") && currentItem) {
       let mod = line.replace(/^\+\s*/, "").trim();
 
-      // REMOVE 1x IF QTY IS 1
-      if (/^1x\s+/i.test(mod))
-        mod = mod.replace(/^1x\s+/i, "");
+      // if missing qty, force "1x "
+      if (!/^\d+x\s+/.test(mod)) {
+        mod = "1x " + mod;
+      }
 
       currentItem.modifiers.push(mod);
     }
   }
+
   return output;
 }
 
 // --------------------
-// BUILD RECEIPT
+// BUILD STARPRNT JOB (Buffer)
+// Uses "highlight" (inverted) for:
+// - customer
+// - orderType
+// - EVERY modifier
 // --------------------
 function buildReceipt(customer, orderType, items) {
 
@@ -140,19 +161,19 @@ function buildReceipt(customer, orderType, items) {
 // CHECK EMAIL
 // --------------------
 async function checkEmail() {
-
   try {
-
     const res = await gmail.users.messages.list({
       userId: "me",
       q: "is:unread label:AUTO_PRINT",
       maxResults: 1,
     });
 
-    if (!res.data.messages) return;
+    if (!res.data.messages || res.data.messages.length === 0) return;
 
     const messageId = res.data.messages[0].id;
+    console.log("EMAIL FOUND - CREATING JOB:", messageId);
 
+    // Fetch message
     const msg = await gmail.users.messages.get({
       userId: "me",
       id: messageId,
@@ -162,6 +183,7 @@ async function checkEmail() {
     const body = getBody(msg.data.payload);
     const items = parseItems(body);
 
+    // basic extraction placeholders (you’ll refine later)
     let customer = "UNKNOWN";
     let orderType = "UNKNOWN";
 
@@ -171,13 +193,22 @@ async function checkEmail() {
     if (/pickup/i.test(body)) orderType = "PICKUP";
     if (/delivery/i.test(body)) orderType = "DELIVERY";
 
+    // Push print job into queue
     jobs.push(buildReceipt(customer, orderType, items));
 
+    // Mark email read so it won't re-trigger
     await gmail.users.messages.modify({
       userId: "me",
       id: messageId,
       requestBody: { removeLabelIds: ["UNREAD"] },
     });
+
+    // Optional (recommended): also remove AUTO_PRINT to avoid accidental reprocessing later
+    // await gmail.users.messages.modify({
+    //   userId: "me",
+    //   id: messageId,
+    //   requestBody: { removeLabelIds: ["AUTO_PRINT", "UNREAD"] },
+    // });
 
   } catch (e) {
     console.log("GMAIL ERROR:", e.message);
@@ -185,29 +216,59 @@ async function checkEmail() {
 }
 
 // --------------------
-// STAR CLOUDPRNT
+// TEST ROUTE
 // --------------------
-app.post("/starcloudprnt",(req,res)=>{
-  res.setHeader("Content-Type","application/json");
+app.get("/createjob", (req, res) => {
+  // Fixed syntax: Buffer.from([...]) then push, then close properly
+  jobs.push(
+    Buffer.from([
+      0x1b, 0x40,
+      0x1b, 0x61, 0x01,
+      0x1b, 0x21, 0x30,
+      0x48, 0x6f, 0x77, 0x61, 0x72,
+      0x64, 0x27, 0x73, 0x20, 0x44,
+      0x6f, 0x6e, 0x75, 0x74, 0x73,
+      0x0a, 0x0a,
+      0x1b, 0x64, 0x03,
+      0x1d, 0x56, 0x00,
+    ])
+  );
+
+  console.log("JOB CREATED");
+  res.send("Job created");
+});
+
+// --------------------
+// STAR CLOUDPRNT ENDPOINTS
+// --------------------
+app.post("/starcloudprnt", (req, res) => {
+  console.log("PRINTER POLLED");
+
+  res.setHeader("Content-Type", "application/json");
   res.send({
     jobReady: jobs.length > 0,
-    mediaTypes:["application/vnd.star.starprnt"],
-    jobToken:"12345"
+    mediaTypes: ["application/vnd.star.starprnt"],
+    jobToken: "12345",
   });
 });
 
-app.get("/starcloudprnt",(req,res)=>{
-  if(jobs.length > 0){
+app.get("/starcloudprnt", (req, res) => {
+  if (jobs.length > 0) {
+    console.log("PRINTER REQUESTED JOB");
+
     const nextJob = jobs.shift();
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
     res.send(nextJob);
-  }else{
+  } else {
     res.status(204).send();
   }
 });
 
-setInterval(checkEmail,5000);
+// --------------------
+// LOOP
+// --------------------
+setInterval(checkEmail, 5000);
 
-app.listen(process.env.PORT || 3000,()=>{
+app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });
