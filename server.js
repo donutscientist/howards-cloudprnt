@@ -134,7 +134,7 @@ for (const order of items) {
   buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // BOLD
   buffers.push(Buffer.from([0x1B,0x2D,0x01]));  // UNDERLINE ON
-  buffers.push(Buffer.from(order.item, "\n","ascii"));
+  buffers.push(Buffer.from(order.item, "ascii"));
   buffers.push(Buffer.from([0x1B,0x2D,0x00]));  // UNDERLINE OFF
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // BOLD OFF
   buffers.push(Buffer.from([0x1B,0x21,0x00])); // double height
