@@ -103,29 +103,25 @@ function buildReceipt(customer, orderType, items) {
 
   // INIT PRINTER
   buffers.push(Buffer.from([0x1B,0x40]));
-      // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from(" ","ascii"));
+  // 1 SPACE INDENT (NOT INVERTED)
+  buffers.push(Buffer.from(" ","ascii"));
   // --------------------
-  // CUSTOMER (INVERTED)
+  // CUSTOMER (BOLD)
+  // --------------------
+buffers.push(Buffer.from([0x1B,0x45,0x01])); // BOLD
+buffers.push(Buffer.from([0x1B,0x2D,0x01]));  // UNDERLINE ON
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
+  buffers.push(Buffer.from(customer,"ascii"));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
+  buffers.push(Buffer.from("\n\n","ascii"));
+  // 1 SPACE INDENT (NOT INVERTED)
+  buffers.push(Buffer.from(" ","ascii"));
+  // --------------------
+  // ORDER TYPE (BOLD)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
-buffers.push(Buffer.from(customer,"ascii"));
-buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
-     // EMPHASIS ON
-buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
-buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
-  buffers.push(Buffer.from("\n\n","ascii"));
-      // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from(" ","ascii"));
-  // --------------------
-  // ORDER TYPE (INVERTED)
-  // --------------------
-   buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
-buffers.push(Buffer.from(orderType,"ascii"));
-buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
-     // EMPHASIS ON
-buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
-buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
+  buffers.push(Buffer.from(orderType,"ascii"));
+  buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
   buffers.push(Buffer.from("\n\n","ascii"));
 
   // --------------------
@@ -136,15 +132,17 @@ for (const order of items) {
   // --------------------
   // ITEM (UNDERLINE ONLY)
   // --------------------
-  buffers.push(Buffer.from([0x1B,0x2D,0x01]));  // UNDERLINE ON
+  // 1 SPACE INDENT (NOT INVERTED)
+  buffers.push(Buffer.from(" ","ascii"));
   buffers.push(Buffer.from(order.item, "ascii"));
-  buffers.push(Buffer.from([0x1B,0x2D,0x00]));  // UNDERLINE OFF
+buffers.push(Buffer.from([0x1B,0x2D,0x00]));  // UNDERLINE OFF
+buffers.push(Buffer.from([0x1B,0x45,0x00])); // BOLD OFF
   buffers.push(Buffer.from("\n","ascii"));
 
   for (let mod of order.modifiers) {
 
-    // 1 SPACE LEFT INDENT (NORMAL TEXT)
-    buffers.push(Buffer.from("   " + mod + "\n","ascii"));
+  // 1 SPACE LEFT INDENT (NORMAL TEXT)
+  buffers.push(Buffer.from("   " + mod + "\n","ascii"));
   }
 }
 
