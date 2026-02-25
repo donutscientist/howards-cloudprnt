@@ -131,27 +131,22 @@ buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
   // --------------------
   // ITEMS + MODIFIERS
   // --------------------
-  for (const order of items) {
-      // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from(" ","ascii"));
-    // ITEM NORMAL
-    buffers.push(Buffer.from(order.item + "\n","ascii"));
+for (const order of items) {
 
-    for (let mod of order.modifiers) {
+  // --------------------
+  // ITEM (UNDERLINE ONLY)
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x2D,0x01]));  // UNDERLINE ON
+  buffers.push(Buffer.from(order.item, "ascii"));
+  buffers.push(Buffer.from([0x1B,0x2D,0x00]));  // UNDERLINE OFF
+  buffers.push(Buffer.from("\n","ascii"));
 
+  for (let mod of order.modifiers) {
 
-      // 1 SPACE INDENT (NOT INVERTED)
-      buffers.push(Buffer.from("    ","ascii"));
-
-      // MODIFIER INVERTED FROM TEXT ONLY
-       buffers.push(Buffer.from([0x1B,0x1D,0x42,0x01]));
-buffers.push(Buffer.from(mod + "\n","ascii"));
-buffers.push(Buffer.from([0x1B,0x1D,0x42,0x00]));
-     // MODIFIER EMPHASIS ON
-buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold
-buffers.push(Buffer.from([0x1B,0x21,0x10])); // double height
-    }
+    // 1 SPACE LEFT INDENT (NORMAL TEXT)
+    buffers.push(Buffer.from("   " + mod + "\n","ascii"));
   }
+}
 
   // FEED + CUT
   buffers.push(Buffer.from("\n","ascii"));
