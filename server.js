@@ -135,6 +135,7 @@ function buildReceipt(customer, orderType, items) {
 
   return Buffer.concat(buffers);
 }
+
 // --------------------
 // CHECK EMAIL
 // --------------------
