@@ -26,36 +26,45 @@ const gmail = google.gmail({ version: "v1", auth });
 // --------------------
 // EMAIL BODY EXTRACT
 // --------------------
-function getBody(payload) {
-  // Walk parts (plain/text preferred)
-  if (payload.parts && Array.isArray(payload.parts)) {
-    for (const part of payload.parts) {
-      if (part.mimeType === "text/plain" && part.body?.data) {
-        return Buffer.from(part.body.data, "base64").toString("utf8");
-      }
-      if (part.mimeType === "text/html" && part.body?.data) {
-        return Buffer.from(part.body.data, "base64")
+function getBody(payload){
+
+  function walk(parts){
+
+    for(const part of parts){
+
+      if(part.mimeType === "text/html" && part.body?.data){
+
+        return Buffer
+          .from(part.body.data,"base64")
           .toString("utf8")
-.replace(/<\/div>/gi,"\n")
-.replace(/<\/li>/gi,"\n")
-.replace(/<br\s*\/?>/gi,"\n")
-.replace(/<\/tr>/gi,"\n")
-.replace(/<\/p>/gi,"\n")
-.replace(/&nbsp;/gi," ")
-.replace(/<[^>]+>/g,"")
+          .replace(/<\/div>/gi,"\n")
+          .replace(/<\/li>/gi,"\n")
+          .replace(/<br\s*\/?>/gi,"\n")
+          .replace(/<\/tr>/gi,"\n")
+          .replace(/<\/p>/gi,"\n")
+          .replace(/&nbsp;/gi," ")
+          .replace(/<[^>]+>/g,"");
       }
 
-      // Sometimes payload is nested (parts inside parts)
-      if (part.parts) {
-        const nested = getBody(part);
-        if (nested) return nested;
+      if(part.parts){
+        const found = walk(part.parts);
+        if(found) return found;
       }
+
     }
+
+    return null;
   }
 
-  // Fallback to payload.body.data
-  if (payload.body?.data) {
-    return Buffer.from(payload.body.data, "base64").toString("utf8");
+  if(payload.parts){
+    const result = walk(payload.parts);
+    if(result) return result;
+  }
+
+  if(payload.body?.data){
+    return Buffer
+      .from(payload.body.data,"base64")
+      .toString("utf8");
   }
 
   return "";
