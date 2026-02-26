@@ -377,7 +377,6 @@ jobs.push(buildReceipt(customer,orderType,items));
     console.log("GMAIL ERROR:",e.message);
   }
 
-}
 
     // Optional (recommended): also remove AUTO_PRINT to avoid accidental reprocessing later
     // await gmail.users.messages.modify({
