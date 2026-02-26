@@ -386,7 +386,6 @@ if(platform==="GH"){
 
   if(/pickup/i.test(body)) orderType="Pickup";
   if(/delivery/i.test(body)) orderType="Delivery";
-}
 
 jobs.push(buildReceipt(customer,orderType,items));
 
