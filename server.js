@@ -159,8 +159,8 @@ function parseGrubHub(body){
     }
 
     // MODIFIER → ▪️ Coconut
-    if(line.includes("•") && currentItem){
-      let mod = line.split("•")[1].trim();
+    if(line.includes("■") && currentItem){
+      let mod = line.split("■")[1].trim();
       currentItem.modifiers.push(mod);
     }
   }
@@ -197,7 +197,7 @@ function parseGrubHub(body){
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, currentItem) {
+function buildReceipt(customer, orderType, items) {
 
   const buffers = [];
 
@@ -230,7 +230,7 @@ function buildReceipt(customer, orderType, currentItem) {
     buffers.push(Buffer.from([0x1B,0x45,0x01]));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
-    buffers.push(Buffer.from(currentItem + "\n"));
+    buffers.push(Buffer.from(order.Item + "\n"));
     buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
     buffers.push(Buffer.from([0x1B,0x21,0x00]));
     // MODIFIERS (NORMAL)
@@ -339,6 +339,7 @@ let items = [];
 if(platform==="GH"){
 
   const gh = parseGrubHub(body);
+  body = body.replace(/\u00A0/g," ");
 
   customer  = gh.customer;
   orderType = gh.orderType;
