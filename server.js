@@ -144,27 +144,43 @@ function parseGrubHub(body){
 
   for(let raw of lines){
 
-    let line = raw.trim();
+  let line = raw.trim();
+  if(!line) continue;
 
-    // ITEM → 2 x Kolache
-    let itemMatch = line.match(/^(\d+)\s*x\s*([^\$]+)/i);
+  // ---------- ITEM ----------
+  let itemMatch = line.match(/^(\d+)\s*x\s*([^\$]+)/i);
 
-    if(itemMatch){
-      currentItem = {
-        item: itemMatch[1] + "x " + itemMatch[2].trim(),
-        modifiers:[]
-      };
-      items.push(currentItem);
-      continue;
-    }
+  if(itemMatch){
 
-    // MODIFIER → ▪️ Coconut
-    if(/^[•▪\-]/.test(line) && currentItem){
-  let mod = line.replace(/^[•▪\-]\s*/,"").trim();
-  currentItem.modifiers.push(mod);
-}
+    currentItem = {
+      item: itemMatch[1] + "x " + itemMatch[2].trim(),
+      modifiers:[]
+    };
+
+    items.push(currentItem);
+    continue;
   }
 
+  // ---------- MODIFIER ----------
+  if(currentItem){
+
+    // ignore totals / address / instructions
+    if(
+      /total/i.test(line) ||
+      /pickup/i.test(line) ||
+      /deliver/i.test(line) ||
+      /instruction/i.test(line)
+    ) continue;
+
+    // ignore price lines
+    if(/\$\d/.test(line)) continue;
+
+    // ignore anything that looks like another item
+    if(/^\d+\s*x/i.test(line)) continue;
+
+    currentItem.modifiers.push(line);
+  }
+}
   // --------------------
   // GROUP + SORT MODS
   // --------------------
@@ -335,7 +351,7 @@ if(platform==="GH"){
   .replace(/[ ]+/g," ");
 
   const gh = parseGrubHub(body);
-console.log(JSON.stringify(gh.items,null,2));
+console.log("GH ITEMS:",JSON.stringify(gh.items,null,2));
   customer  = gh.customer;
   orderType = gh.orderType;
   items     = gh.items;
