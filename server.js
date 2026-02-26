@@ -159,10 +159,10 @@ function parseGrubHub(body){
     }
 
     // MODIFIER → ▪️ Coconut
-    if(line.includes("■") && currentItem){
-      let mod = line.split("■")[1].trim();
-      currentItem.modifiers.push(mod);
-    }
+    if(line.includes("▪") && currentItem){
+  let mod = line.split("▪")[1].trim();
+  currentItem.modifiers.push(mod);
+}
   }
 
   // --------------------
@@ -341,14 +341,23 @@ if(platform==="GH"){
 // PLATFORM PARSER
 // -------------------------
 
+let customer="UNKNOWN";
+let orderType="UNKNOWN";
+let items=[];
+
 if(platform==="GH"){
 
+  body = body
+  .replace(/\u00A0/g," ")
+  .replace(/\t/g," ")
+  .replace(/\r/g,"")
+  .replace(/[ ]+/g," ");
+
   const gh = parseGrubHub(body);
-  body = body.replace(/\u00A0/g," ");
 
   customer  = gh.customer;
   orderType = gh.orderType;
-  items = gh.items;
+  items     = gh.items;
 
   if(gh.totalItems){
     items.unshift({
@@ -358,6 +367,16 @@ if(platform==="GH"){
   }
 
 }else{
+
+  items = parseItems(body);
+
+  const nameMatch = body.match(/Customer:\s*(.+)/i);
+  if(nameMatch) customer=nameMatch[1].trim();
+
+  if(/pickup/i.test(body)) orderType="Pickup";
+  if(/delivery/i.test(body)) orderType="Delivery";
+}
+    
 
   // future DD / UE / SQ
   items = parseItems(body);
