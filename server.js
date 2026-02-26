@@ -147,7 +147,7 @@ function parseGrubHub(body){
     let line = raw.trim();
 
     // ITEM → 2 x Kolache
-    let itemMatch = line.match(/^(\d+)\s*x\s*(.+)$/i);
+    let itemMatch = line.match(/^(\d+)\s*x\s*([^\$]+)/i);
 
     if(itemMatch){
       currentItem = {
@@ -159,8 +159,8 @@ function parseGrubHub(body){
     }
 
     // MODIFIER → ▪️ Coconut
-    if(line.includes("▪") && currentItem){
-  let mod = line.split("▪")[1].trim();
+    if(/^[•▪\-]/.test(line) && currentItem){
+  let mod = line.replace(/^[•▪\-]\s*/,"").trim();
   currentItem.modifiers.push(mod);
 }
   }
@@ -335,7 +335,7 @@ if(platform==="GH"){
   .replace(/[ ]+/g," ");
 
   const gh = parseGrubHub(body);
-
+console.log(JSON.stringify(gh.items,null,2));
   customer  = gh.customer;
   orderType = gh.orderType;
   items     = gh.items;
