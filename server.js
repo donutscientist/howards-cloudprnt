@@ -230,7 +230,7 @@ function buildReceipt(customer, orderType, items) {
     buffers.push(Buffer.from([0x1B,0x45,0x01]));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
-    buffers.push(Buffer.from(order.Item + "\n"));
+    buffers.push(Buffer.from(order.item + "\n"));
     buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
     buffers.push(Buffer.from([0x1B,0x21,0x00]));
     // MODIFIERS (NORMAL)
@@ -314,23 +314,28 @@ async function checkEmail(){
       format:"full"
     });
 
-    const body = getBody(msg.data.payload);
+    let body = getBody(msg.data.payload);
     let totalItems = "";
 
 if(platform==="GH"){
 
-  const totalMatch =
-    body.match(/Total items:\s*(\d+)/i) ||
-    body.match(/\b(\d+)\s+items\b/i);
+  body = body.replace(/\u00A0/g," ");
+  
+  // MUST BE FIRST
 
-  if(totalMatch)
-    totalItems = totalMatch[1];
+  const gh = parseGrubHub(body);
 
+  customer  = gh.customer;
+  orderType = gh.orderType;
+  items     = gh.items;
+
+  if(gh.totalItems){
+    items.unshift({
+      item:`Total Items: ${gh.totalItems}`,
+      modifiers:[]
+    });
+  }
 }
-
-   let customer = "UNKNOWN";
-let orderType = "UNKNOWN";
-let items = [];
 
 // -------------------------
 // PLATFORM PARSER
