@@ -364,15 +364,6 @@ console.log("GH ITEMS:",JSON.stringify(gh.items,null,2));
   }
 
 }else{
-
-  items = parseItems(body);
-
-  const nameMatch = body.match(/Customer:\s*(.+)/i);
-  if(nameMatch) customer=nameMatch[1].trim();
-
-  if(/pickup/i.test(body)) orderType="Pickup";
-  if(/delivery/i.test(body)) orderType="Delivery";
-}
     
 
 jobs.push(buildReceipt(customer,orderType,items));
