@@ -315,35 +315,16 @@ async function checkEmail(){
     });
 
     let body = getBody(msg.data.payload);
+
+    let customer="UNKNOWN";
+let orderType="UNKNOWN";
+let items=[];
     let totalItems = "";
 
-if(platform==="GH"){
-
-  body = body.replace(/\u00A0/g," ");
-  
-  // MUST BE FIRST
-
-  const gh = parseGrubHub(body);
-
-  customer  = gh.customer;
-  orderType = gh.orderType;
-  items     = gh.items;
-
-  if(gh.totalItems){
-    items.unshift({
-      item:`Total Items: ${gh.totalItems}`,
-      modifiers:[]
-    });
-  }
-}
 
 // -------------------------
 // PLATFORM PARSER
 // -------------------------
-
-let customer="UNKNOWN";
-let orderType="UNKNOWN";
-let items=[];
 
 if(platform==="GH"){
 
