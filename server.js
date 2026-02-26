@@ -374,7 +374,6 @@ jobs.push(buildReceipt(customer,orderType,items));
       requestBody:{ removeLabelIds:["UNREAD"] }
     });
 
-  }catch(e){
     console.log("GMAIL ERROR:",e.message);
   }
 
