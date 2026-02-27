@@ -205,7 +205,7 @@ if(orderId === "UNKNOWN"){
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, phone, totalItems, items, orderId) {
+function buildReceipt(customer, orderType, phone, totalItems, items, orderId, queueId) {
 
   const buffers = [];
 
@@ -424,23 +424,20 @@ app.post("/starcloudprnt", (req, res) => {
 });
 
 app.get("/starcloudprnt", (req, res) => {
+  const token = req.query.token || req.query.jobToken; // ✅ accept both
 
-  const token = req.query.jobToken;
+  console.log("PRINTER REQUESTED:", token);
+  console.log("JOBS:", [...jobs.keys()]);
 
-  console.log("PRINTER REQUESTED:",token);
-  console.log("JOBS:",[...jobs.keys()]);
-
-  if(token && jobs.has(token)){
-
+  if (token && jobs.has(token)) {
     const job = jobs.get(token);
 
     jobs.delete(token);
     pending = pending.filter(t => t !== token);
 
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
     res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control","no-store");
-
+    res.setHeader("Cache-Control", "no-store");
     return res.send(job);
   }
 
