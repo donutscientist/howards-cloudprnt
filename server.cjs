@@ -1,6 +1,7 @@
 const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
+const crypto = require("crypto");
 
 const app = express();
 app.use(express.raw({ type: "*/*" }));
@@ -8,8 +9,21 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // PRINT JOB QUEUE
 // --------------------
-let jobs = new Map();
-let pending = [];
+const jobs = new Map();   // token -> Buffer
+const pending = [];       // FIFO list of tokens
+
+function newQueueId() {
+  // Unique ID not related to email data
+  return crypto.randomUUID();
+}
+
+function enqueueJob(buffer) {
+  const token = newQueueId();
+  jobs.set(token, buffer);
+  pending.push(token);
+  console.log("QUEUE ADDED:", token, "PENDING:", pending.length);
+  return token;
+}
 
 // --------------------
 // GMAIL AUTH
@@ -28,140 +42,121 @@ const gmail = google.gmail({ version: "v1", auth });
 // --------------------
 // EMAIL BODY EXTRACT
 // --------------------
-function decodeBase64Url(data){
+function decodeBase64Url(data) {
   return Buffer.from(
     data
-      .replace(/-/g,'+')
-      .replace(/_/g,'/')
-      .padEnd(data.length + (4 - data.length % 4) % 4,'='),
-    'base64'
-  ).toString('utf8');
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
+    "base64"
+  ).toString("utf8");
 }
 
-function getBody(payload){
+function getBody(payload) {
+  function walk(part) {
+    if (!part) return "";
 
-  function walk(part){
-
-    if(!part) return "";
-
-    if(part.mimeType==="text/html" && part.body?.data){
-
+    if (part.mimeType === "text/html" && part.body?.data) {
       return decodeBase64Url(part.body.data);
     }
 
-    if(part.parts){
-      for(const p of part.parts){
+    if (part.parts) {
+      for (const p of part.parts) {
         const result = walk(p);
-        if(result) return result;
+        if (result) return result;
       }
     }
-
     return "";
   }
-
   return walk(payload);
 }
 
-function parseItems(body) {
-  const lines = body.split("\n");
+// --------------------
+// ORDER ID PARSER (IMPROVED)
+// --------------------
+function extractOrderId(html) {
+  // 1) try text-only (most reliable vs raw HTML)
+  const $ = cheerio.load(html);
+  const text = $("body").text()
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  const output = [];
-  let currentItem = null;
+  // Common patterns seen in GH emails:
+  // "Order: #76653270-2645821"
+  // "Order # 76653270-2645821"
+  // "Order number 76653270-2645821"
+  let m =
+    text.match(/Order\s*(?:Number|ID)?\s*#?\s*[:\-]?\s*([0-9]{5,}(?:-[0-9]{3,})+)/i) ||
+    text.match(/#\s*([0-9]{5,}(?:-[0-9]{3,})+)/);
 
-  for (let raw of lines) {
-    let line = (raw || "").trim();
-    if (!line) continue;
+  if (m) return m[1].trim();
 
-    // ITEM like "2x Chocolate Donut"  (no space between qty and x)
-    if (/^\d+x\s+/.test(line)) {
-      currentItem = { item: line, modifiers: [] };
-      output.push(currentItem);
-      continue;
-    }
+  // 2) fallback: raw HTML (sometimes the text is broken)
+  const cleanHtml = html
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ");
 
-    // MODIFIER like "+ Extra Glaze" or "+ 2x Sprinkles"
-    if (line.startsWith("+") && currentItem) {
-      let mod = line.replace(/^\+\s*/, "").trim();
+  m =
+    cleanHtml.match(/Order\s*(?:Number|ID)?\s*#?\s*[:\-]?\s*([0-9]{5,}(?:-[0-9]{3,})+)/i) ||
+    cleanHtml.match(/#\s*([0-9]{5,}(?:-[0-9]{3,})+)/);
 
-
-      currentItem.modifiers.push(mod);
-    }
-  }
-
-  return output;
+  return m ? m[1].trim() : "UNKNOWN";
 }
 
+// --------------------
+// GRUBHUB PARSE
+// --------------------
 function parseGrubHub(html) {
   const $ = cheerio.load(html);
 
-  // ---------- Hidden POS block (best for phone + service type) ----------
   const hidden = $('[data-section="grubhub-order-data"]');
 
-  let orderId = "UNKNOWN";
+  const orderId = extractOrderId(html);
+  console.log("PARSED ORDER ID:", orderId);
 
-// normalize GH weird spacing first
-const cleanHtml = html
-  .replace(/&nbsp;/gi,' ')
-  .replace(/\u00A0/g,' ')
-  .replace(/\s+/g,' ');
-
-// main regex
-const orderMatch = cleanHtml.match(/Order\s*#?\s*[:\-]?\s*([\d\-]{8,})/i);
-
-if(orderMatch){
-  orderId = orderMatch[1];
-}
-
-// fallback (GH sometimes hides "Order")
-if(orderId === "UNKNOWN"){
-  const fallback = cleanHtml.match(/#\s*([\d]{6,}-[\d]+)/);
-  if(fallback) orderId = fallback[1];
-}
-
-console.log("PARSED ORDER ID:",orderId);
-
-  let phone =
+  const phone =
     hidden.find('[data-field="phone"]').text().trim() ||
-    $('a[href^="tel:"]').first().text().trim();
+    $('a[href^="tel:"]').first().text().trim() ||
+    "";
 
-  let service = hidden.find('[data-field="service-type"]').text().trim(); // "Delivery" / "Pickup"
-  let orderType =
+  const service = hidden.find('[data-field="service-type"]').text().trim();
+  const orderType =
     service.toLowerCase().includes("delivery") ? "GrubHub Delivery" :
-    service.toLowerCase().includes("pickup")   ? "GrubHub Pickup" :
-    // fallback if hidden missing:
+    service.toLowerCase().includes("pickup") ? "GrubHub Pickup" :
     $('div:contains("Deliver to:")').length ? "GrubHub Delivery" :
-    $('div:contains("Pickup by:")').length  ? "GrubHub Pickup"  :
+    $('div:contains("Pickup by:")').length ? "GrubHub Pickup" :
     "GrubHub Pickup";
 
-  // ---------- Customer name from the visible “Deliver to:” line ----------
   let customer = "UNKNOWN";
   const deliverLabel = $('div').filter((i, el) => $(el).text().trim() === "Deliver to:").first();
   if (deliverLabel.length) {
-    customer = deliverLabel.next('div').text().trim() || customer;
+    customer = deliverLabel.next("div").text().trim() || customer;
   } else {
     const pickupLabel = $('div').filter((i, el) => $(el).text().trim() === "Pickup by:").first();
-    if (pickupLabel.length) customer = pickupLabel.next('div').text().trim() || customer;
+    if (pickupLabel.length) customer = pickupLabel.next("div").text().trim() || customer;
   }
 
-  // ---------- Total items from “1   item” ----------
   let totalItems = "0";
-  const totalP = $('p').filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim())).first();
+  const totalP = $("p")
+    .filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim()))
+    .first();
+
   if (totalP.length) {
-    const m = totalP.text().replace(/\s+/g, " ").match(/(\d+)\s*item/i);
-    if (m) totalItems = m[1];
+    const mm = totalP.text().replace(/\s+/g, " ").match(/(\d+)\s*item/i);
+    if (mm) totalItems = mm[1];
   }
 
-  // ---------- Items + modifiers from visible receipt table ----------
   const items = [];
 
-  // Find item rows that look like: [qty td] [x td] [name td with bold div]
-  $('tr').each((i, tr) => {
-    const tds = $(tr).find('td');
+  $("tr").each((i, tr) => {
+    const tds = $(tr).find("td");
     if (tds.length < 3) return;
 
     const qtyTxt = $(tds[0]).text().replace(/\s+/g, " ").trim();
-    const xTxt   = $(tds[1]).text().replace(/\s+/g, " ").trim();
-    const name   = $(tds[2]).text().replace(/\s+/g, " ").trim();
+    const xTxt = $(tds[1]).text().replace(/\s+/g, " ").trim();
+    const name = $(tds[2]).text().replace(/\s+/g, " ").trim();
 
     if (!/^\d+$/.test(qtyTxt)) return;
     if (xTxt.toLowerCase() !== "x") return;
@@ -169,271 +164,179 @@ console.log("PARSED ORDER ID:",orderId);
 
     const currentItem = { item: `${qtyTxt}x ${name}`, modifiers: [] };
 
-    // modifiers are in the NEXT row, inside <li> like: "▪️12 Glazed Iced"
-    const next = $(tr).next('tr');
-    next.find('li').each((j, li) => {
+    const next = $(tr).next("tr");
+    next.find("li").each((j, li) => {
       let mod = $(li).text().replace(/\s+/g, " ").trim();
-      mod = mod.replace(/^▪️/,'').replace(/^▪/,'').trim(); // remove bullet only
-      if (mod) currentItem.modifiers.push(mod); // keep FULL string like "12 Glazed Iced"
+      mod = mod.replace(/^▪️/, "").replace(/^▪/, "").trim();
+      if (mod) currentItem.modifiers.push(mod);
     });
 
-    // group modifiers by counting duplicates
+    // group duplicates -> "2x ___"
     const counter = {};
     for (const m of currentItem.modifiers) counter[m] = (counter[m] || 0) + 1;
-    currentItem.modifiers = Object.entries(counter)
-      .map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
+    currentItem.modifiers = Object.entries(counter).map(([n, q]) =>
+      q === 1 ? n : `${q}x ${n}`
+    );
 
     items.push(currentItem);
   });
-if(orderId === "UNKNOWN"){
-  console.log("ORDER ID NOT FOUND - SKIPPING EMAIL");
-  return {
-    customer:"UNKNOWN",
-    orderType:"UNKNOWN",
-    phone:"",
-    totalItems:"",
-    orderId:null,
-    items:[]
-  };
-}
+
   return { customer, orderType, phone, totalItems, orderId, items };
 }
-// --------------------
-// BUILD STARPRNT JOB (Buffer)
-// Uses "highlight" (inverted) for:
-// - customer
-// - orderType
-// - EVERY modifier
-// --------------------
-function buildReceipt(customer, orderType, phone, totalItems, items, orderId, queueId) {
 
+// --------------------
+// BUILD STARPRNT JOB
+// --------------------
+function buildReceipt(customer, orderType, phone, totalItems, items, orderId) {
   const buffers = [];
+  buffers.push(Buffer.from([0x1B, 0x40])); // ESC @ init
 
-  // --------------------
-  // INIT
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x40])); // ESC @
+  // customer
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+  buffers.push(Buffer.from(" " + customer + "\n"));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // --------------------
-  // BOLD CUSTOMER NAME
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + customer + "\n")); 
-  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
-
-  // --------------------
-  // ORDER TYPE (BOLD ONLY)
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  // order type
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" " + orderType + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-// --------------------
-  // BOLD Phone
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + phone + "\n")); 
-  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+  // phone
+  if (phone) {
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+    buffers.push(Buffer.from(" " + phone + "\n"));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  }
 
-// --------------------
-  // BOLD Order Id
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + orderId + "\n")); 
-  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+  // order id (DO NOT BLOCK PRINTING if unknown)
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+  buffers.push(Buffer.from(" Order: " + (orderId || "UNKNOWN") + "\n"));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // --------------------
-  // Total Items (BOLD ONLY)
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  // total items
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from("Total Items: " + totalItems + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
-  
-  
-  // --------------------
-  // ITEMS + MODIFIERS
-  // --------------------
-  for (const order of items) {
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-    // ITEM (UNDERLINE ONLY)
+  for (const order of items) {
     buffers.push(Buffer.from("\n"));
-    buffers.push(Buffer.from([0x1B,0x45,0x01]));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
-    buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
     buffers.push(Buffer.from(order.item + "\n"));
-    buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
-    buffers.push(Buffer.from([0x1B,0x21,0x00]));
-    // MODIFIERS (NORMAL)
-    for (let mod of order.modifiers) {
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
+    buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
+    for (const mod of order.modifiers) {
       buffers.push(Buffer.from("    " + mod + "\n"));
     }
   }
 
-  // --------------------
-  // FEED + CUT
-  // --------------------
   buffers.push(Buffer.from("\n"));
-  buffers.push(Buffer.from([0x1B,0x64,0x03])); // feed 3
-  buffers.push(Buffer.from([0x1D,0x56,0x00])); // cut
+  buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
+  buffers.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
 
   return Buffer.concat(buffers);
 }
-function generateQueueId(orderId, phone, customer){
 
-  if(orderId && orderId !== "UNKNOWN"){
-    return orderId;
-  }
-
-  if(phone){
-    return "PH-" + phone.replace(/\D/g,'');
-  }
-
-  if(customer){
-    return "NM-" + customer.replace(/\s/g,'') + "-" + Date.now();
-  }
-
-  return "TS-" + Date.now();
-}
 // --------------------
 // CHECK EMAIL
 // --------------------
 async function checkEmail() {
   try {
-
-    // -------------------------
-    // CHECK LABELS
-    // -------------------------
-
     const gh = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:GH_PRINT",
-      maxResults:1
+      userId: "me",
+      q: "is:unread label:GH_PRINT",
+      maxResults: 1,
     });
 
-    let messageId = null;
-    let platform = null;
+    if (!gh.data.messages?.length) return;
 
-    if (gh.data.messages) {
-      messageId = gh.data.messages[0].id;
-      platform = "GH";
-    }
-
-    if (!messageId) return;
-
-    console.log("EMAIL FOUND:", platform);
+    const messageId = gh.data.messages[0].id;
+    console.log("EMAIL FOUND: GH", messageId);
 
     const msg = await gmail.users.messages.get({
-      userId:"me",
-      id:messageId,
-      format:"full"
+      userId: "me",
+      id: messageId,
+      format: "full",
     });
 
     let body = getBody(msg.data.payload);
+    body = body
+      .replace(/\u00A0/g, " ")
+      .replace(/\t/g, " ")
+      .replace(/\r/g, "");
 
-    let customer="UNKNOWN";
-    let orderType="UNKNOWN";
-    let phone="";
-    let totalItems="";
-    let items=[];
-    let orderId="";
+    const parsed = parseGrubHub(body);
 
-    if (platform === "GH") {
-      body = body
-        .replace(/\u00A0/g," ")
-        .replace(/\t/g," ")
-        .replace(/\r/g,"")
-        .replace(/[ ]+/g," ");
+    const receipt = buildReceipt(
+      parsed.customer,
+      parsed.orderType,
+      parsed.phone,
+      parsed.totalItems,
+      parsed.items,
+      parsed.orderId
+    );
 
-      const ghParsed = parseGrubHub(body);
-      customer = ghParsed.customer;
-      orderType = ghParsed.orderType;
-      phone = ghParsed.phone;
-      totalItems = ghParsed.totalItems;
-      items = ghParsed.items;
-      orderId = ghParsed.orderId;
-    }
-
-    const queueId = generateQueueId(orderId, phone, customer);
-
-const receipt = buildReceipt(
-  customer,
-  orderType,
-  phone,
-  totalItems,
-  items,
-  queueId
-);
-
-if(!jobs.has(queueId)){
-  jobs.set(queueId, receipt);
-  pending.push(queueId);
-  console.log("QUEUE ADDED:",queueId);
-}
+    enqueueJob(receipt);
 
     await gmail.users.messages.modify({
-      userId:"me",
-      id:messageId,
-      requestBody:{ removeLabelIds:["UNREAD"] }
+      userId: "me",
+      id: messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] },
     });
 
     console.log("PRINT JOB ADDED");
-
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
   }
 }
-    
 
 // --------------------
 // TEST ROUTE
 // --------------------
 app.get("/createjob", (req, res) => {
-
-  const testId = "TEST-"+Date.now();
-
   const test = Buffer.from([
-    0x1b,0x40,
-    0x1b,0x61,0x01,
-    0x1b,0x21,0x30,
-    0x54,0x45,0x53,0x54,
-    0x0a,0x0a,
-    0x1b,0x64,0x03,
-    0x1d,0x56,0x00
+    0x1b, 0x40,
+    0x1b, 0x61, 0x01,
+    0x1b, 0x21, 0x30,
+    0x54, 0x45, 0x53, 0x54,
+    0x0a, 0x0a,
+    0x1b, 0x64, 0x03,
+    0x1d, 0x56, 0x00,
   ]);
 
-  jobs.set(testId,test);
-  pending.push(testId);
-
-  console.log("TEST JOB:",testId);
-  res.send("Test job created");
+  const token = enqueueJob(test);
+  res.send("Test job created: " + token);
 });
 
 // --------------------
 // STAR CLOUDPRNT ENDPOINTS
 // --------------------
 app.post("/starcloudprnt", (req, res) => {
+  const token = pending.length ? pending[0] : "";
 
-  const token = pending.length ? pending[0] : null;
-
+  // IMPORTANT: jobToken is returned in POST, printer will request GET ?token=jobToken
   res.json({
     jobReady: !!token,
     mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: token || ""
+    jobToken: token,
   });
-
 });
 
 app.get("/starcloudprnt", (req, res) => {
-  const token = req.query.token || req.query.jobToken; // ✅ accept both
+  // Most Star clients use `token`. Some might use `jobToken`.
+  const token = req.query.token || req.query.jobToken || "";
 
   console.log("PRINTER REQUESTED:", token);
-  console.log("JOBS:", [...jobs.keys()]);
+  console.log("PENDING:", pending.length);
 
   if (token && jobs.has(token)) {
     const job = jobs.get(token);
 
     jobs.delete(token);
-    pending = pending.filter(t => t !== token);
+    // remove ONLY the first matching token (FIFO safe)
+    const idx = pending.indexOf(token);
+    if (idx >= 0) pending.splice(idx, 1);
 
     res.setHeader("Content-Type", "application/vnd.star.starprnt");
     res.setHeader("Content-Length", job.length);
@@ -441,10 +344,8 @@ app.get("/starcloudprnt", (req, res) => {
     return res.send(job);
   }
 
-  res.status(204).send();
+  return res.status(204).send();
 });
-
-     // ← ← ← ← ← THIS WAS MISSING
 
 // --------------------
 // LOOP
