@@ -278,7 +278,22 @@ function buildReceipt(customer, orderType, phone, totalItems, items, orderId) {
 
   return Buffer.concat(buffers);
 }
+function generateQueueId(orderId, phone, customer){
 
+  if(orderId && orderId !== "UNKNOWN"){
+    return orderId;
+  }
+
+  if(phone){
+    return "PH-" + phone.replace(/\D/g,'');
+  }
+
+  if(customer){
+    return "NM-" + customer.replace(/\s/g,'') + "-" + Date.now();
+  }
+
+  return "TS-" + Date.now();
+}
 // --------------------
 // CHECK EMAIL
 // --------------------
