@@ -264,62 +264,49 @@ function buildReceipt(customer, orderType, items) {
 // --------------------
 // CHECK EMAIL
 // --------------------
-async function checkEmail(){
+async function checkEmail() {
+  try {
+    // ... find messageId/platform ...
+    if (!messageId) return;
 
-  try{
+    const msg = await gmail.users.messages.get({ userId:"me", id:messageId, format:"full" });
 
-    // -------------------------
-    // CHECK LABELS
-    // -------------------------
+    let body = getBody(msg.data.payload);
 
-    const gh = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:GH_PRINT",
-      maxResults:1
-    });
+    let customer="UNKNOWN";
+    let orderType="UNKNOWN";
+    let items=[];
 
-    const dd = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:DD_PRINT",
-      maxResults:1
-    });
+    if (platform === "GH") {
+      body = body
+        .replace(/\u00A0/g," ")
+        .replace(/\t/g," ")
+        .replace(/\r/g,"")
+        .replace(/[ ]+/g," ");
 
-    const ue = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:UE_PRINT",
-      maxResults:1
-    });
+      const ghParsed = parseGrubHub(body);
+      customer = ghParsed.customer;
+      orderType = ghParsed.orderType;
+      items = ghParsed.items;
 
-    const sq = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:SQ_PRINT",
-      maxResults:1
-    });
-
-    let messageId = null;
-    let platform = null;
-
-    if(gh.data.messages){
-      messageId = gh.data.messages[0].id;
-      platform = "GH";
-    }
-    else if(dd.data.messages){
-      messageId = dd.data.messages[0].id;
-      platform = "DD";
-    }
-    else if(ue.data.messages){
-      messageId = ue.data.messages[0].id;
-      platform = "UE";
-    }
-    else if(sq.data.messages){
-      messageId = sq.data.messages[0].id;
-      platform = "SQ";
+      if (ghParsed.totalItems) {
+        items.unshift({ item:`Total Items: ${ghParsed.totalItems}`, modifiers:[] });
+      }
     }
 
-    if(!messageId) return;
+    // ✅ this should happen AFTER parsing (for GH/DD/UE/SQ)
+    jobs.push(buildReceipt(customer, orderType, items));
 
-    console.log("EMAIL FOUND:",platform);
+    await gmail.users.messages.modify({
+      userId:"me",
+      id:messageId,
+      requestBody:{ removeLabelIds:["UNREAD"] }
+    });
 
+  } catch (e) {
+    console.log("CHECK EMAIL ERROR:", e.message);
+  }
+}
     const msg = await gmail.users.messages.get({
       userId:"me",
       id:messageId,
