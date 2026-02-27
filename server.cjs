@@ -96,62 +96,97 @@ function parseGrubHub(html){
 
   const $ = cheerio.load(html);
 
-  let customer = "UNKNOWN";
-  let orderType = "GrubHub Pickup";
+  // 🔥 USE HIDDEN GH DATA BLOCK
+  const gh = $('[data-section="grubhub-order-data"]');
+
+  // ------------------
+  // CUSTOMER NAME
+  // ------------------
+  let customer = $('div:contains("Deliver to:")')
+    .next()
+    .text()
+    .trim();
+
+  // ------------------
+  // PHONE
+  // ------------------
+  let phone = gh.find('[data-field="phone"]')
+    .text()
+    .trim();
+
+  // ------------------
+  // DELIVERY / PICKUP
+  // ------------------
+  let orderType = gh.find('[data-field="service-type"]')
+    .text()
+    .trim() === "Delivery"
+      ? "GrubHub Delivery"
+      : "GrubHub Pickup";
+
+  // ------------------
+  // TOTAL ITEMS
+  // ------------------
+  let totalItems = $('#test')
+    .text()
+    .match(/\d+/)?.[0] || "0";
+
+  // ------------------
+  // ITEMS
+  // ------------------
   let items = [];
-  let totalItems = "0";
 
-  // CUSTOMER
-  $('td').each((i,el)=>{
-    let t = $(el).text().trim();
+  gh.find('[data-section="menu-item"]').each((i,el)=>{
 
-    if(t.includes("Pickup by:")){
-      customer = t.replace("Pickup by:","").trim();
-      orderType="GrubHub Pickup";
+    let name = $(el)
+      .find('[data-field="menu-item-name"]')
+      .text()
+      .trim();
+
+    let qty = $(el)
+      .find('[data-field="quantity"]')
+      .text()
+      .trim();
+
+    let currentItem = {
+      item: qty + "x " + name,
+      modifiers:[]
+    };
+
+    // ------------------
+    // MODIFIERS
+    // ------------------
+
+    $(el)
+  .nextUntil('[data-section="menu-item"]')
+  .find('li')
+  .each((j,li)=>{
+
+    let mod = $(li)
+      .text()
+      .replace("▪️","")
+      .replace("▪","")
+      .trim();
+
+    if(mod.length){
+      // ✅ PUSH FULL NAME
+      currentItem.modifiers.push(mod);
     }
+});
 
-    if(t.includes("Deliver to:")){
-      customer = t.replace("Deliver to:","").trim();
-      orderType="GrubHub Delivery";
-    }
-  });
+    // GROUP MODIFIERS
+    let counter = {};
+    for(let m of currentItem.modifiers)
+      counter[m] = (counter[m]||0)+1;
 
-  // ITEMS (TABLE BASED)
-  $('tr').each((i,row)=>{
+    currentItem.modifiers = Object.entries(counter)
+      .map(([n,q])=> q+"x "+n);
 
-    const cols = $(row).find('td');
-
-    if(cols.length===2){
-
-      let name = $(cols[0]).text().trim();
-      let qty  = $(cols[1]).text().trim();
-
-      if(/^\d+$/.test(qty) && name.length>2){
-        items.push({
-          item: qty+"x "+name,
-          modifiers:[]
-        });
-      }
-    }
-
-    // modifiers (next row often single td)
-    if(cols.length===1){
-      let mod = $(cols[0]).text().trim();
-
-      if(mod.startsWith("+") && items.length){
-        items[items.length-1].modifiers.push(
-          mod.replace("+","").trim()
-        );
-      }
-    }
-
-    if($(row).text().match(/(\d+)\s+items?/i))
-      totalItems=$(row).text().match(/(\d+)/)[1];
-
+    items.push(currentItem);
   });
 
   return {
     customer,
+    phone,
     orderType,
     totalItems,
     items
