@@ -92,105 +92,79 @@ function parseItems(body) {
   return output;
 }
 
-function parseGrubHub(html){
-
+function parseGrubHub(html) {
   const $ = cheerio.load(html);
 
-  // 🔥 USE HIDDEN GH DATA BLOCK
-  const gh = $('[data-section="grubhub-order-data"]');
+  // ---------- Hidden POS block (best for phone + service type) ----------
+  const hidden = $('[data-section="grubhub-order-data"]');
 
-  // ------------------
-  // CUSTOMER NAME
-  // ------------------
-  let customer = $('div:contains("Deliver to:")')
-    .next()
-    .text()
-    .trim();
+  let phone =
+    hidden.find('[data-field="phone"]').text().trim() ||
+    $('a[href^="tel:"]').first().text().trim();
 
-  // ------------------
-  // PHONE
-  // ------------------
-  let phone = gh.find('[data-field="phone"]')
-    .text()
-    .trim();
+  let service = hidden.find('[data-field="service-type"]').text().trim(); // "Delivery" / "Pickup"
+  let orderType =
+    service.toLowerCase().includes("delivery") ? "GrubHub Delivery" :
+    service.toLowerCase().includes("pickup")   ? "GrubHub Pickup" :
+    // fallback if hidden missing:
+    $('div:contains("Deliver to:")').length ? "GrubHub Delivery" :
+    $('div:contains("Pickup by:")').length  ? "GrubHub Pickup"  :
+    "GrubHub Pickup";
 
-  // ------------------
-  // DELIVERY / PICKUP
-  // ------------------
-  let orderType = gh.find('[data-field="service-type"]')
-    .text()
-    .trim() === "Delivery"
-      ? "GrubHub Delivery"
-      : "GrubHub Pickup";
+  // ---------- Customer name from the visible “Deliver to:” line ----------
+  let customer = "UNKNOWN";
+  const deliverLabel = $('div').filter((i, el) => $(el).text().trim() === "Deliver to:").first();
+  if (deliverLabel.length) {
+    customer = deliverLabel.next('div').text().trim() || customer;
+  } else {
+    const pickupLabel = $('div').filter((i, el) => $(el).text().trim() === "Pickup by:").first();
+    if (pickupLabel.length) customer = pickupLabel.next('div').text().trim() || customer;
+  }
 
-  // ------------------
-  // TOTAL ITEMS
-  // ------------------
-  let totalItems = $('#test')
-    .text()
-    .match(/\d+/)?.[0] || "0";
+  // ---------- Total items from “1   item” ----------
+  let totalItems = "0";
+  const totalP = $('p').filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim())).first();
+  if (totalP.length) {
+    const m = totalP.text().replace(/\s+/g, " ").match(/(\d+)\s*item/i);
+    if (m) totalItems = m[1];
+  }
 
-  // ------------------
-  // ITEMS
-  // ------------------
-  let items = [];
+  // ---------- Items + modifiers from visible receipt table ----------
+  const items = [];
 
-  gh.find('[data-section="menu-item"]').each((i,el)=>{
+  // Find item rows that look like: [qty td] [x td] [name td with bold div]
+  $('tr').each((i, tr) => {
+    const tds = $(tr).find('td');
+    if (tds.length < 3) return;
 
-    let name = $(el)
-      .find('[data-field="menu-item-name"]')
-      .text()
-      .trim();
+    const qtyTxt = $(tds[0]).text().replace(/\s+/g, " ").trim();
+    const xTxt   = $(tds[1]).text().replace(/\s+/g, " ").trim();
+    const name   = $(tds[2]).text().replace(/\s+/g, " ").trim();
 
-    let qty = $(el)
-      .find('[data-field="quantity"]')
-      .text()
-      .trim();
+    if (!/^\d+$/.test(qtyTxt)) return;
+    if (xTxt.toLowerCase() !== "x") return;
+    if (!name) return;
 
-    let currentItem = {
-      item: qty + "x " + name,
-      modifiers:[]
-    };
+    const currentItem = { item: `${qtyTxt}x ${name}`, modifiers: [] };
 
-    // ------------------
-    // MODIFIERS
-    // ------------------
+    // modifiers are in the NEXT row, inside <li> like: "▪️12 Glazed Iced"
+    const next = $(tr).next('tr');
+    next.find('li').each((j, li) => {
+      let mod = $(li).text().replace(/\s+/g, " ").trim();
+      mod = mod.replace(/^▪️/,'').replace(/^▪/,'').trim(); // remove bullet only
+      if (mod) currentItem.modifiers.push(mod); // keep FULL string like "12 Glazed Iced"
+    });
 
-    $(el)
-  .nextUntil('[data-section="menu-item"]')
-  .find('li')
-  .each((j,li)=>{
-
-    let mod = $(li)
-      .text()
-      .replace("▪️","")
-      .replace("▪","")
-      .trim();
-
-    if(mod.length){
-      // ✅ PUSH FULL NAME
-      currentItem.modifiers.push(mod);
-    }
-});
-
-    // GROUP MODIFIERS
-    let counter = {};
-    for(let m of currentItem.modifiers)
-      counter[m] = (counter[m]||0)+1;
-
+    // group modifiers by counting duplicates
+    const counter = {};
+    for (const m of currentItem.modifiers) counter[m] = (counter[m] || 0) + 1;
     currentItem.modifiers = Object.entries(counter)
-      .map(([n,q])=> q+"x "+n);
+      .map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
 
     items.push(currentItem);
   });
 
-  return {
-    customer,
-    phone,
-    orderType,
-    totalItems,
-    items
-  };
+  return { customer, orderType, phone, totalItems, items };
 }
 // --------------------
 // BUILD STARPRNT JOB (Buffer)
