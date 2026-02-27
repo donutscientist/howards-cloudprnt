@@ -353,11 +353,21 @@ async function checkEmail() {
       orderId = ghParsed.orderId;
     }
 
-    const receipt = buildReceipt(customer, orderType, phone, totalItems, items, orderId);
+    const queueId = generateQueueId(orderId, phone, customer);
 
-if(orderId && !jobs.has(orderId)){
-  jobs.set(orderId, receipt);
-  pending.push(orderId);
+const receipt = buildReceipt(
+  customer,
+  orderType,
+  phone,
+  totalItems,
+  items,
+  queueId
+);
+
+if(!jobs.has(queueId)){
+  jobs.set(queueId, receipt);
+  pending.push(queueId);
+  console.log("QUEUE ADDED:",queueId);
 }
 
     await gmail.users.messages.modify({
