@@ -8,7 +8,8 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // PRINT JOB QUEUE
 // --------------------
-let jobs = [];
+let jobs = new Map();
+let pending = [];
 
 // --------------------
 // GMAIL AUTH
@@ -98,6 +99,14 @@ function parseGrubHub(html) {
   // ---------- Hidden POS block (best for phone + service type) ----------
   const hidden = $('[data-section="grubhub-order-data"]');
 
+  let orderId = "UNKNOWN";
+
+  const orderMatch = html.match(/Order\s*#\s*([\d\-]+)/i);
+
+if(orderMatch){
+  orderId = orderMatch[1].replace(/\s/g,'');
+}
+
   let phone =
     hidden.find('[data-field="phone"]').text().trim() ||
     $('a[href^="tel:"]').first().text().trim();
@@ -164,7 +173,7 @@ function parseGrubHub(html) {
     items.push(currentItem);
   });
 
-  return { customer, orderType, phone, totalItems, items };
+  return { customer, orderType, phone, totalItems, orderId, items };
 }
 // --------------------
 // BUILD STARPRNT JOB (Buffer)
@@ -173,7 +182,7 @@ function parseGrubHub(html) {
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, phone, totalItems, items) {
+function buildReceipt(customer, orderType, phone, totalItems, items, orderId) {
 
   const buffers = [];
 
@@ -197,14 +206,21 @@ function buildReceipt(customer, orderType, phone, totalItems, items) {
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
 
 // --------------------
-  // BOLD CUSTOMER NAME
+  // BOLD Phone
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
   buffers.push(Buffer.from(" " + phone + "\n")); 
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
 
+// --------------------
+  // BOLD Order Id
   // --------------------
-  // ORDER TYPE (BOLD ONLY)
+  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
+  buffers.push(Buffer.from(" " + orderId + "\n")); 
+  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+
+  // --------------------
+  // Total Items (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
   buffers.push(Buffer.from("Total Items: " + totalItems + "\n"));
@@ -281,6 +297,7 @@ async function checkEmail() {
     let phone="";
     let totalItems="";
     let items=[];
+    let orderId="";
 
     if (platform === "GH") {
       body = body
@@ -295,9 +312,13 @@ async function checkEmail() {
       phone = ghParsed.phone;
       totalItems = ghParsed.totalItems;
       items = ghParsed.items;
+      orderId = ghParsed.orderId;
     }
 
-    jobs.push(buildReceipt(customer, orderType, phone, totalItems, items));
+    const receipt = buildReceipt(customer, orderType, phone, totalItems, items, orderId);
+
+jobs.set(orderId, receipt);
+pending.push(orderId);
 
     await gmail.users.messages.modify({
       userId:"me",
@@ -340,26 +361,33 @@ app.get("/createjob", (req, res) => {
 // STAR CLOUDPRNT ENDPOINTS
 // --------------------
 app.post("/starcloudprnt", (req, res) => {
-  console.log("PRINTER POLLED");
 
-  res.setHeader("Content-Type", "application/json");
-  res.send({
-    jobReady: jobs.length > 0,
+  const token = pending.length ? pending[0] : null;
+
+  res.json({
+    jobReady: token !== null,
     mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: "12345",
+    jobToken: token
   });
+
 });
 
 app.get("/starcloudprnt", (req, res) => {
-  if (jobs.length > 0) {
-    console.log("PRINTER REQUESTED JOB");
 
-    const nextJob = jobs.shift();
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.send(nextJob);
-  } else {
-    res.status(204).send();
+  const token = req.query.jobToken;
+
+  if(token && jobs.has(token)){
+
+    const job = jobs.get(token);
+
+    jobs.delete(token);
+    pending.shift();
+
+    res.setHeader("Content-Type","application/vnd.star.starprnt");
+    return res.send(job);
   }
+
+  res.status(204).send();
 });
 
 // --------------------
