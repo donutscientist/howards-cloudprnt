@@ -1,9 +1,9 @@
 {
   "name": "howards-cloudprnt",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "server.cjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.cjs"
   },
   "dependencies": {
     "googleapis": "^137.0.0",
