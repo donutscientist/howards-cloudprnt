@@ -8,8 +8,7 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // PRINT JOB QUEUE
 // --------------------
-let jobs = {};
-let pending = [];
+let jobs = [];
 
 // --------------------
 // GMAIL AUTH
@@ -174,7 +173,7 @@ function parseGrubHub(html) {
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, items) {
+function buildReceipt(customer, orderType, phone, totalItems, items) {
 
   const buffers = [];
 
@@ -194,9 +193,23 @@ function buildReceipt(customer, orderType, items) {
   // ORDER TYPE (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + orderType + "\n"));
+  buffers.push(Buffer.from(" " + phone + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
 
+  // --------------------
+  // Phone
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
+  buffers.push(Buffer.from(" " + totalItems + "\n")); 
+  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+
+  // --------------------
+  // Total Items (BOLD ONLY)
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  buffers.push(Buffer.from(" " + orderType + "\n"));
+  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+  
   // --------------------
   // ITEMS + MODIFIERS
   // --------------------
@@ -263,8 +276,10 @@ async function checkEmail() {
     let body = getBody(msg.data.payload);
 
     let customer="UNKNOWN";
-    let orderType="UNKNOWN";
-    let items=[];
+let orderType="UNKNOWN";
+let phone="";
+let totalItems="";
+let items=[];
 
     if (platform === "GH") {
       body = body
@@ -274,22 +289,13 @@ async function checkEmail() {
         .replace(/[ ]+/g," ");
 
       const ghParsed = parseGrubHub(body);
-      customer = ghParsed.customer;
-      orderType = ghParsed.orderType;
-      items = ghParsed.items;
+customer = ghParsed.customer;
+orderType = ghParsed.orderType;
+phone = ghParsed.phone;
+totalItems = ghParsed.totalItems;
+items = ghParsed.items;
 
-      if (ghParsed.totalItems) {
-        items.unshift({
-          item:`Total Items: ${ghParsed.totalItems}`,
-          modifiers:[]
-        });
-      }
-    }
-
-    const id = "JOB-"+Date.now()+"-"+Math.random();
-
-jobs[id] = buildReceipt(customer, orderType, items);
-pending.push(id);
+    jobs.push(buildReceipt(customer, orderType, phone, totalItems, items));
 
     await gmail.users.messages.modify({
       userId:"me",
@@ -309,22 +315,22 @@ pending.push(id);
 // TEST ROUTE
 // --------------------
 app.get("/createjob", (req, res) => {
+  // Fixed syntax: Buffer.from([...]) then push, then close properly
+  jobs.push(
+    Buffer.from([
+      0x1b, 0x40,
+      0x1b, 0x61, 0x01,
+      0x1b, 0x21, 0x30,
+      0x48, 0x6f, 0x77, 0x61, 0x72,
+      0x64, 0x27, 0x73, 0x20, 0x44,
+      0x6f, 0x6e, 0x75, 0x74, 0x73,
+      0x0a, 0x0a,
+      0x1b, 0x64, 0x03,
+      0x1d, 0x56, 0x00,
+    ])
+  );
 
-  const id = "TEST-"+Date.now();
-
-  const test = Buffer.from([
-    0x1b,0x40,
-    0x48,0x4f,0x57,
-    0x41,0x52,0x44,
-    0x0a,
-    0x1b,0x64,0x03,
-    0x1d,0x56,0x00
-  ]);
-
-  jobs[id] = test;
-  pending.push(id);
-
-  console.log("TEST JOB:",id);
+  console.log("JOB CREATED");
   res.send("Job created");
 });
 
@@ -332,41 +338,26 @@ app.get("/createjob", (req, res) => {
 // STAR CLOUDPRNT ENDPOINTS
 // --------------------
 app.post("/starcloudprnt", (req, res) => {
-
   console.log("PRINTER POLLED");
 
-  if(!pending.length){
-    return res.json({jobReady:false});
-  }
-
-  const token = pending[0];
-
-  res.json({
-    jobReady:true,
-    mediaTypes:["application/vnd.star.starprnt"],
-    jobToken:token
+  res.setHeader("Content-Type", "application/json");
+  res.send({
+    jobReady: jobs.length > 0,
+    mediaTypes: ["application/vnd.star.starprnt"],
+    jobToken: "12345",
   });
 });
 
-
 app.get("/starcloudprnt", (req, res) => {
+  if (jobs.length > 0) {
+    console.log("PRINTER REQUESTED JOB");
 
-  const token = req.query.jobToken;
-
-  console.log("PRINTER REQUESTED:",token);
-
-  if(token && jobs[token]){
-
-    const job = jobs[token];
-
-    delete jobs[token];
-    pending = pending.filter(t => t !== token);
-
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
-    return res.send(job);
+    const nextJob = jobs.shift();
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.send(nextJob);
+  } else {
+    res.status(204).send();
   }
-
-  res.status(204).send();
 });
 
 // --------------------
