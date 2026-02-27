@@ -46,9 +46,7 @@ function getBody(payload){
 
     if(part.mimeType==="text/html" && part.body?.data){
 
-      return Buffer
-        .from(part.body.data,"base64")
-        .toString("utf8");
+      return decodeBase64Url(part.body.data);
     }
 
     if(part.parts){
@@ -172,7 +170,17 @@ if(orderMatch){
 
     items.push(currentItem);
   });
-
+if(orderId === "UNKNOWN"){
+  console.log("ORDER ID NOT FOUND - SKIPPING EMAIL");
+  return {
+    customer:"UNKNOWN",
+    orderType:"UNKNOWN",
+    phone:"",
+    totalItems:"",
+    orderId:null,
+    items:[]
+  };
+}
   return { customer, orderType, phone, totalItems, orderId, items };
 }
 // --------------------
@@ -317,8 +325,10 @@ async function checkEmail() {
 
     const receipt = buildReceipt(customer, orderType, phone, totalItems, items, orderId);
 
-jobs.set(orderId, receipt);
-pending.push(orderId);
+if(orderId && !jobs.has(orderId)){
+  jobs.set(orderId, receipt);
+  pending.push(orderId);
+}
 
     await gmail.users.messages.modify({
       userId:"me",
@@ -338,23 +348,24 @@ pending.push(orderId);
 // TEST ROUTE
 // --------------------
 app.get("/createjob", (req, res) => {
-  // Fixed syntax: Buffer.from([...]) then push, then close properly
-  jobs.push(
-    Buffer.from([
-      0x1b, 0x40,
-      0x1b, 0x61, 0x01,
-      0x1b, 0x21, 0x30,
-      0x48, 0x6f, 0x77, 0x61, 0x72,
-      0x64, 0x27, 0x73, 0x20, 0x44,
-      0x6f, 0x6e, 0x75, 0x74, 0x73,
-      0x0a, 0x0a,
-      0x1b, 0x64, 0x03,
-      0x1d, 0x56, 0x00,
-    ])
-  );
 
-  console.log("JOB CREATED");
-  res.send("Job created");
+  const testId = "TEST-"+Date.now();
+
+  const test = Buffer.from([
+    0x1b,0x40,
+    0x1b,0x61,0x01,
+    0x1b,0x21,0x30,
+    0x54,0x45,0x53,0x54,
+    0x0a,0x0a,
+    0x1b,0x64,0x03,
+    0x1d,0x56,0x00
+  ]);
+
+  jobs.set(testId,test);
+  pending.push(testId);
+
+  console.log("TEST JOB:",testId);
+  res.send("Test job created");
 });
 
 // --------------------
