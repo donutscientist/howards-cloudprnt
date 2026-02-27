@@ -415,8 +415,8 @@ app.post("/starcloudprnt", (req, res) => {
 
 app.get("/starcloudprnt", (req, res) => {
 
-  const token = req.query.token;
-  
+  const token = req.query.jobToken;
+
   console.log("PRINTER REQUESTED:",token);
   console.log("JOBS:",[...jobs.keys()]);
 
@@ -429,13 +429,15 @@ app.get("/starcloudprnt", (req, res) => {
 
     res.setHeader("Content-Type","application/vnd.star.starprnt");
     res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control","no-store");
 
     return res.send(job);
   }
 
   res.status(204).send();
+});
 
-});   // ← ← ← ← ← THIS WAS MISSING
+     // ← ← ← ← ← THIS WAS MISSING
 
 // --------------------
 // LOOP
