@@ -173,7 +173,7 @@ function parseGrubHub(html) {
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, items) {
+function buildReceipt(customer, orderType, phone, totalItems, items) {
 
   const buffers = [];
 
@@ -196,6 +196,21 @@ function buildReceipt(customer, orderType, items) {
   buffers.push(Buffer.from(" " + orderType + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
 
+// --------------------
+  // BOLD CUSTOMER NAME
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
+  buffers.push(Buffer.from(" " + phone + "\n")); 
+  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+
+  // --------------------
+  // ORDER TYPE (BOLD ONLY)
+  // --------------------
+  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  buffers.push(Buffer.from("Total Items: " + totalItems + "\n"));
+  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+  
+  
   // --------------------
   // ITEMS + MODIFIERS
   // --------------------
@@ -263,6 +278,8 @@ async function checkEmail() {
 
     let customer="UNKNOWN";
     let orderType="UNKNOWN";
+    let phone="";
+    let totalItems="";
     let items=[];
 
     if (platform === "GH") {
@@ -275,17 +292,12 @@ async function checkEmail() {
       const ghParsed = parseGrubHub(body);
       customer = ghParsed.customer;
       orderType = ghParsed.orderType;
+      phone = ghParsed.phone;
+      totalItems = ghParsed.totalItems;
       items = ghParsed.items;
-
-      if (ghParsed.totalItems) {
-        items.unshift({
-          item:`Total Items: ${ghParsed.totalItems}`,
-          modifiers:[]
-        });
-      }
     }
 
-    jobs.push(buildReceipt(customer, orderType, items));
+    jobs.push(buildReceipt(customer, orderType, phone, totalItems, items));
 
     await gmail.users.messages.modify({
       userId:"me",
