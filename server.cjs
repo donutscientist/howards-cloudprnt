@@ -303,7 +303,7 @@ items = ghParsed.items;
       requestBody:{ removeLabelIds:["UNREAD"] }
     });
 
-    console.log("PRINT JOB ADDED");
+    console.log("PRINT JOB ADDED");}
 
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
