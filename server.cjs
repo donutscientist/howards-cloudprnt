@@ -266,10 +266,34 @@ function buildReceipt(customer, orderType, items) {
 // --------------------
 async function checkEmail() {
   try {
-    // ... find messageId/platform ...
+
+    // -------------------------
+    // CHECK LABELS
+    // -------------------------
+
+    const gh = await gmail.users.messages.list({
+      userId:"me",
+      q:"is:unread label:GH_PRINT",
+      maxResults:1
+    });
+
+    let messageId = null;
+    let platform = null;
+
+    if (gh.data.messages) {
+      messageId = gh.data.messages[0].id;
+      platform = "GH";
+    }
+
     if (!messageId) return;
 
-    const msg = await gmail.users.messages.get({ userId:"me", id:messageId, format:"full" });
+    console.log("EMAIL FOUND:", platform);
+
+    const msg = await gmail.users.messages.get({
+      userId:"me",
+      id:messageId,
+      format:"full"
+    });
 
     let body = getBody(msg.data.payload);
 
@@ -290,11 +314,13 @@ async function checkEmail() {
       items = ghParsed.items;
 
       if (ghParsed.totalItems) {
-        items.unshift({ item:`Total Items: ${ghParsed.totalItems}`, modifiers:[] });
+        items.unshift({
+          item:`Total Items: ${ghParsed.totalItems}`,
+          modifiers:[]
+        });
       }
     }
 
-    // ✅ this should happen AFTER parsing (for GH/DD/UE/SQ)
     jobs.push(buildReceipt(customer, orderType, items));
 
     await gmail.users.messages.modify({
@@ -302,6 +328,8 @@ async function checkEmail() {
       id:messageId,
       requestBody:{ removeLabelIds:["UNREAD"] }
     });
+
+    console.log("PRINT JOB ADDED");
 
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
