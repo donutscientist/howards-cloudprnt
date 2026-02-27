@@ -403,20 +403,24 @@ app.get("/starcloudprnt", (req, res) => {
   const token = req.query.token;
   
   console.log("PRINTER REQUESTED:",token);
-console.log("JOBS:",[...jobs.keys()]);
+  console.log("JOBS:",[...jobs.keys()]);
 
   if(token && jobs.has(token)){
 
-  const job = jobs.get(token);
+    const job = jobs.get(token);
 
-  jobs.delete(token);
-  pending = pending.filter(t => t !== token);
+    jobs.delete(token);
+    pending = pending.filter(t => t !== token);
 
-  res.setHeader("Content-Type","application/vnd.star.starprnt");
-  res.setHeader("Content-Length", job.length);
+    res.setHeader("Content-Type","application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
 
-  return res.send(job);
-}
+    return res.send(job);
+  }
+
+  res.status(204).send();
+
+});   // ← ← ← ← ← THIS WAS MISSING
 
 // --------------------
 // LOOP
