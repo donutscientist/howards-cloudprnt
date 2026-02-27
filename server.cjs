@@ -309,54 +309,6 @@ async function checkEmail() {
 }
     
 
-
-// -------------------------
-// PLATFORM PARSER
-// -------------------------
-
-if(platform==="GH"){
-
-  body = body
-  .replace(/\u00A0/g," ")
-  .replace(/\t/g," ")
-  .replace(/\r/g,"")
-  .replace(/[ ]+/g," ");
-
-  const gh = parseGrubHub(body);
-console.log("GH ITEMS:",JSON.stringify(gh.items,null,2));
-  customer  = gh.customer;
-  orderType = gh.orderType;
-  items     = gh.items;
-
-  if(gh.totalItems){
-    items.unshift({
-      item:`Total Items: ${gh.totalItems}`,
-      modifiers:[]
-    });
-  }
-
-}else{
-    
-
-jobs.push(buildReceipt(customer,orderType,items));
-
-    await gmail.users.messages.modify({
-      userId:"me",
-      id:messageId,
-      requestBody:{ removeLabelIds:["UNREAD"] }
-    });
-
-    console.log("GMAIL ERROR:",e.message);
-  }
-
-
-    // Optional (recommended): also remove AUTO_PRINT to avoid accidental reprocessing later
-    // await gmail.users.messages.modify({
-    //   userId: "me",
-    //   id: messageId,
-    //   requestBody: { removeLabelIds: ["AUTO_PRINT", "UNREAD"] },
-    // });
-
 // --------------------
 // TEST ROUTE
 // --------------------
