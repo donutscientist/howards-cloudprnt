@@ -1,4 +1,4 @@
-const { convert } = require("html-to-text");
+const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
 
@@ -43,29 +43,13 @@ function getBody(payload){
 
     if(!part) return "";
 
-    // TEXT/PLAIN
-    if(part.mimeType==="text/plain" && part.body?.data){
+    if(part.mimeType==="text/html" && part.body?.data){
+
       return Buffer
         .from(part.body.data,"base64")
         .toString("utf8");
     }
 
-    // TEXT/HTML → CONVERT TO PLAIN TEXT
-    if(part.mimeType==="text/html" && part.body?.data){
-
-      const html = Buffer
-        .from(part.body.data,"base64")
-        .toString("utf8");
-
-      return convert(html,{
-        wordwrap:false,
-        selectors:[
-          {selector:'a',options:{ignoreHref:true}}
-        ]
-      });
-    }
-
-    // WALK CHILD PARTS
     if(part.parts){
       for(const p of part.parts){
         const result = walk(p);
@@ -108,95 +92,107 @@ function parseItems(body) {
   return output;
 }
 
-function parseGrubHub(body){
+function parseGrubHub(html){
+
+  const $ = cheerio.load(html);
 
   let customer = "UNKNOWN";
   let orderType = "GrubHub Pickup";
   let totalItems = "0";
-
-  // --------------------
-  // NAME + TYPE
-  // --------------------
-  let deliverMatch = body.match(/Deliver to:\s*(.+)/i);
-  let pickupMatch  = body.match(/Pickup by:\s*(.+)/i);
-  if(deliverMatch){
-    customer = deliverMatch[1].trim();
-    orderType = "GrubHub Delivery";
-  }
-  else if(pickupMatch){
-    customer = pickupMatch[1].trim();
-    orderType = "GrubHub Pickup";
-  }
-
-  // --------------------
-  // TOTAL ITEMS
-  // --------------------
-  let totalMatch = body.match(/(\d+)\s*items?/i);
-  if(totalMatch)
-    totalItems = totalMatch[1];
-
-  // --------------------
-  // ITEMS + MODIFIERS
-  // --------------------
-  let lines = body.split("\n");
   let items = [];
-  let currentItem = null;
 
-  for(let raw of lines){
+  // ------------------
+  // CUSTOMER NAME
+  // ------------------
 
-  let line = raw.trim();
-  if(!line) continue;
+  let deliver = $('*')
+    .filter((i,el)=>$(el).text().includes("Deliver to:"))
+    .text();
 
-  // ---------- ITEM ----------
-  let itemMatch = line.match(/^(\d+)\s*x\s*([^\$]+)/i);
+  let pickup = $('*')
+    .filter((i,el)=>$(el).text().includes("Pickup by:"))
+    .text();
 
-  if(itemMatch){
+  if(deliver){
+    customer = deliver.replace("Deliver to:","").trim();
+    orderType="GrubHub Delivery";
+  }
 
-    currentItem = {
-      item: itemMatch[1] + "x " + itemMatch[2].trim(),
+  if(pickup){
+    customer = pickup.replace("Pickup by:","").trim();
+    orderType="GrubHub Pickup";
+  }
+
+  // ------------------
+  // TOTAL ITEMS
+  // ------------------
+
+  $('*').each((i,el)=>{
+
+    let t = $(el).text();
+
+    if(t.match(/(\d+)\s+items?/i))
+      totalItems = t.match(/(\d+)/)[1];
+  });
+
+  // ------------------
+  // ITEMS
+  // ------------------
+
+  $('[data-field="menu-item-name"]').each((i,el)=>{
+
+    let name = $(el).text().trim();
+
+    let qty = $(el)
+      .closest('[data-section="menu-item"]')
+      .find('[data-field="quantity"]')
+      .text()
+      .trim();
+
+    let currentItem = {
+      item: qty + "x " + name,
       modifiers:[]
     };
 
+    // ------------------
+    // MODIFIERS
+    // ------------------
+
+    $(el)
+      .closest('[data-section="menu-item"]')
+      .find('li')
+      .each((j,li)=>{
+
+        let mod = $(li).text().replace("▪","").trim();
+
+        let m = mod.match(/^(\d+)\s+(.+)/);
+
+        if(m){
+          for(let k=0;k<parseInt(m[1]);k++)
+            currentItem.modifiers.push(m[2]);
+        }else{
+          currentItem.modifiers.push(mod);
+        }
+
+      });
+
     items.push(currentItem);
-    continue;
-  }
+  });
 
-  // ---------- MODIFIER ----------
-  if(currentItem){
+  // ------------------
+  // GROUP MODIFIERS
+  // ------------------
 
-    // ignore totals / address / instructions
-    if(
-      /total/i.test(line) ||
-      /pickup/i.test(line) ||
-      /deliver/i.test(line) ||
-      /instruction/i.test(line)
-    ) continue;
-
-    // ignore price lines
-    if(/\$\d/.test(line)) continue;
-
-    // ignore anything that looks like another item
-    if(/^\d+\s*x/i.test(line)) continue;
-
-    currentItem.modifiers.push(line);
-  }
-}
-  // --------------------
-  // GROUP + SORT MODS
-  // --------------------
   for(let order of items){
 
-    let counter = {};
+    let counter={};
 
     for(let m of order.modifiers)
-      counter[m] = (counter[m]||0)+1;
+      counter[m]=(counter[m]||0)+1;
 
     order.modifiers = Object.entries(counter)
       .sort((a,b)=>a[1]-b[1])
-      .map(([name,qty])=>{
-        if(qty===1) return name;
-        return qty+"x "+name;
-      });
+      .map(([n,q])=> q===1 ? n : q+"x "+n);
   }
 
   return {
