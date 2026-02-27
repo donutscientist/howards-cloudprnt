@@ -98,102 +98,57 @@ function parseGrubHub(html){
 
   let customer = "UNKNOWN";
   let orderType = "GrubHub Pickup";
-  let totalItems = "0";
   let items = [];
+  let totalItems = "0";
 
-  // ------------------
-  // CUSTOMER NAME
-  // ------------------
+  // CUSTOMER
+  $('td').each((i,el)=>{
+    let t = $(el).text().trim();
 
-  let deliver = $('*')
-    .filter((i,el)=>$(el).text().includes("Deliver to:"))
-    .text();
+    if(t.includes("Pickup by:")){
+      customer = t.replace("Pickup by:","").trim();
+      orderType="GrubHub Pickup";
+    }
 
-  let pickup = $('*')
-    .filter((i,el)=>$(el).text().includes("Pickup by:"))
-    .text();
-
-  if(deliver){
-    customer = deliver.replace("Deliver to:","").trim();
-    orderType="GrubHub Delivery";
-  }
-
-  if(pickup){
-    customer = pickup.replace("Pickup by:","").trim();
-    orderType="GrubHub Pickup";
-  }
-
-  // ------------------
-  // TOTAL ITEMS
-  // ------------------
-
-  $('*').each((i,el)=>{
-
-    let t = $(el).text();
-
-    if(t.match(/(\d+)\s+items?/i))
-      totalItems = t.match(/(\d+)/)[1];
+    if(t.includes("Deliver to:")){
+      customer = t.replace("Deliver to:","").trim();
+      orderType="GrubHub Delivery";
+    }
   });
 
-  // ------------------
-  // ITEMS
-  // ------------------
+  // ITEMS (TABLE BASED)
+  $('tr').each((i,row)=>{
 
-  $('[data-field="menu-item-name"]').each((i,el)=>{
+    const cols = $(row).find('td');
 
-    let name = $(el).text().trim();
+    if(cols.length===2){
 
-    let qty = $(el)
-      .closest('[data-section="menu-item"]')
-      .find('[data-field="quantity"]')
-      .text()
-      .trim();
+      let name = $(cols[0]).text().trim();
+      let qty  = $(cols[1]).text().trim();
 
-    let currentItem = {
-      item: qty + "x " + name,
-      modifiers:[]
-    };
+      if(/^\d+$/.test(qty) && name.length>2){
+        items.push({
+          item: qty+"x "+name,
+          modifiers:[]
+        });
+      }
+    }
 
-    // ------------------
-    // MODIFIERS
-    // ------------------
+    // modifiers (next row often single td)
+    if(cols.length===1){
+      let mod = $(cols[0]).text().trim();
 
-    $(el)
-      .closest('[data-section="menu-item"]')
-      .find('li')
-      .each((j,li)=>{
+      if(mod.startsWith("+") && items.length){
+        items[items.length-1].modifiers.push(
+          mod.replace("+","").trim()
+        );
+      }
+    }
 
-        let mod = $(li).text().replace("▪","").trim();
+    if($(row).text().match(/(\d+)\s+items?/i))
+      totalItems=$(row).text().match(/(\d+)/)[1];
 
-        let m = mod.match(/^(\d+)\s+(.+)/);
-
-        if(m){
-          for(let k=0;k<parseInt(m[1]);k++)
-            currentItem.modifiers.push(m[2]);
-        }else{
-          currentItem.modifiers.push(mod);
-        }
-
-      });
-
-    items.push(currentItem);
   });
-
-  // ------------------
-  // GROUP MODIFIERS
-  // ------------------
-
-  for(let order of items){
-
-    let counter={};
-
-    for(let m of order.modifiers)
-      counter[m]=(counter[m]||0)+1;
-
-    order.modifiers = Object.entries(counter)
-      .sort((a,b)=>a[1]-b[1])
-      .map(([n,q])=> q===1 ? n : q+"x "+n);
-  }
 
   return {
     customer,
