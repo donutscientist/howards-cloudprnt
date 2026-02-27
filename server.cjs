@@ -99,11 +99,26 @@ function parseGrubHub(html) {
 
   let orderId = "UNKNOWN";
 
-  const orderMatch = html.match(/Order\s*#\s*([\d\-]+)/i);
+// normalize GH weird spacing first
+const cleanHtml = html
+  .replace(/&nbsp;/gi,' ')
+  .replace(/\u00A0/g,' ')
+  .replace(/\s+/g,' ');
+
+// main regex
+const orderMatch = cleanHtml.match(/Order\s*#?\s*[:\-]?\s*([\d\-]{8,})/i);
 
 if(orderMatch){
-  orderId = orderMatch[1].replace(/\s/g,'');
+  orderId = orderMatch[1];
 }
+
+// fallback (GH sometimes hides "Order")
+if(orderId === "UNKNOWN"){
+  const fallback = cleanHtml.match(/#\s*([\d]{6,}-[\d]+)/);
+  if(fallback) orderId = fallback[1];
+}
+
+console.log("PARSED ORDER ID:",orderId);
 
   let phone =
     hidden.find('[data-field="phone"]').text().trim() ||
@@ -376,30 +391,32 @@ app.post("/starcloudprnt", (req, res) => {
   const token = pending.length ? pending[0] : null;
 
   res.json({
-    jobReady: token !== null,
+    jobReady: !!token,
     mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: token
+    jobToken: token || ""
   });
 
 });
 
 app.get("/starcloudprnt", (req, res) => {
 
-  const token = req.query.jobToken;
+  const token = req.query.token;
+  
+  console.log("PRINTER REQUESTED:",token);
+console.log("JOBS:",[...jobs.keys()]);
 
   if(token && jobs.has(token)){
 
-    const job = jobs.get(token);
+  const job = jobs.get(token);
 
-    jobs.delete(token);
-    pending.shift();
+  jobs.delete(token);
+  pending = pending.filter(t => t !== token);
 
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
-    return res.send(job);
-  }
+  res.setHeader("Content-Type","application/vnd.star.starprnt");
+  res.setHeader("Content-Length", job.length);
 
-  res.status(204).send();
-});
+  return res.send(job);
+}
 
 // --------------------
 // LOOP
