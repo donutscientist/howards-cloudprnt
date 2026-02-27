@@ -307,18 +307,7 @@ async function checkEmail() {
     console.log("CHECK EMAIL ERROR:", e.message);
   }
 }
-    const msg = await gmail.users.messages.get({
-      userId:"me",
-      id:messageId,
-      format:"full"
-    });
-
-    let body = getBody(msg.data.payload);
-
-    let customer="UNKNOWN";
-let orderType="UNKNOWN";
-let items=[];
-    let totalItems = "";
+    
 
 
 // -------------------------
