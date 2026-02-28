@@ -307,26 +307,26 @@ if (isModifier && current) {
 // NOTE placement: directly under Total Items
 // --------------------
 
-function wrap32(text){
+const COLS = 32;
 
-  if(!text) return [""];
+function wrapWithIndent(text, indent=""){
+  
+  if(!text) return [];
 
   text = text.replace(/\s+/g," ").trim();
 
+  const usable = COLS - indent.length; // THIS IS THE FIX
   const lines = [];
 
-  while(text.length > 32){
+  while(text.length > usable){
+    let cut = text.lastIndexOf(" ", usable);
+    if(cut <= 0) cut = usable;
 
-    // find last space before 32
-    let idx = text.lastIndexOf(" ",32);
-
-    if(idx === -1) idx = 32; // force split if no space
-
-    lines.push(text.substring(0,idx));
-    text = text.substring(idx).trim();
+    lines.push(indent + text.substring(0,cut));
+    text = text.substring(cut).trim();
   }
 
-  if(text.length) lines.push(text);
+  if(text.length) lines.push(indent + text);
 
   return lines;
 }
@@ -371,19 +371,15 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // --------------------
-// ITEMS + MODIFIERS
-// --------------------
-for (const order of items) {
+  for (const order of items) {
 
   buffers.push(Buffer.from("\n"));
 
-  // -------- ITEM --------
-  const itemLines = wrap32(order.item);
-
+  // -------- ITEM (2 space indent) --------
   buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
   buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
 
+  const itemLines = wrapWithIndent(order.item,"  "); // 2 indent
   itemLines.forEach(l=>{
     buffers.push(Buffer.from(l + "\n"));
   });
@@ -391,17 +387,16 @@ for (const order of items) {
   buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
   buffers.push(Buffer.from([0x1B,0x45,0])); // BOLD OFF
 
-  // -------- MODIFIERS --------
+  // -------- MODIFIERS (4 space indent) --------
   for(const mod of order.modifiers || []){
 
-    const modLines = wrap32(mod);
-
+    const modLines = wrapWithIndent(mod,"    "); // 4 indent
     modLines.forEach(l=>{
-      buffers.push(Buffer.from("    " + l + "\n")); // 2 space indent
+      buffers.push(Buffer.from(l + "\n"));
     });
 
-    }
   }
+}
 
   buffers.push(Buffer.from("\n"));
   buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
