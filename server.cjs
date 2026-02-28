@@ -159,124 +159,111 @@ function parseGrubHub(html) {
 // --------------------
 // SQUARE PARSER (USES text/plain from the email)
 // --------------------
-function parseSquareFromPlain(plainRaw) {
-  // decode quoted-printable and normalize
-  const plain = decodeQuotedPrintable(plainRaw)
-    .replace(/\r/g, "")
-    .replace(/\u00A0/g, " ")
-    .replace(/[ ]+/g, " ");
+function parseSquare(body){
 
-  const lines = plain
+  body = body
+    .replace(/\r/g,"")
+    .replace(/\u00A0/g," ")
+    .replace(/[ ]+/g," ");
+
+  const lines = body
     .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .map(l=>l.trim())
+    .filter(Boolean);
 
-  // ----- estimate + orderType -----
-  let estimate = "";
-  let orderType = "Square Pickup";
+  // --------------------
+  // ESTIMATE + ORDER TYPE
+  // --------------------
+  let estimate="";
+  let orderType="Square Pickup";
 
-  const idxPickup = lines.findIndex((l) => /^Estimated Pickup Time$/i.test(l));
-  const idxDelivery = lines.findIndex((l) => /^Estimated Delivery Time$/i.test(l));
+  for(let i=0;i<lines.length;i++){
 
-  if (idxDelivery !== -1 && lines[idxDelivery + 1]) {
-    estimate = lines[idxDelivery + 1];
-    orderType = "Square Delivery";
-  } else if (idxPickup !== -1 && lines[idxPickup + 1]) {
-    estimate = lines[idxPickup + 1];
-    orderType = "Square Pickup";
+  if(lines[i].includes("Estimated Pickup Time")){
+    estimate=lines[i+1]||"";
+    orderType="Square Pickup";
   }
 
-  // ----- note (only if present) -----
-  let note = "";
-  const idxNotes = lines.findIndex((l) => /^Notes$/i.test(l));
-  if (idxNotes !== -1 && lines[idxNotes + 1]) {
-    const maybe = lines[idxNotes + 1];
-    // Avoid accidentally grabbing "Order status" link text if formats change
-    if (!/^Order status/i.test(maybe)) note = maybe;
+  if(lines[i].includes("Estimated Delivery Time")){
+    estimate=lines[i+1]||"";
+    orderType="Square Delivery";
+  }
+}
+
+  // --------------------
+  // NOTE
+  // --------------------
+  let note="";
+  const noteIndex=lines.findIndex(l=>l==="Notes");
+  if(noteIndex!==-1){
+    note=lines[noteIndex+1]||"";
   }
 
-  // ----- customer + phone: take the LAST phone match (customer block is near bottom) -----
-  const phoneRe = /\(\d{3}\)\s*\d{3}-\d{4}/;
-  let phone = "";
-  let customer = "UNKNOWN";
+  // --------------------
+  // CUSTOMER + PHONE (BOTTOM BLOCK)
+  // --------------------
+  let phone="";
+  let customer="UNKNOWN";
 
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (phoneRe.test(lines[i])) {
-      phone = lines[i].match(phoneRe)[0];
-      // previous non-empty line is customer name
-      if (lines[i - 1] && !phoneRe.test(lines[i - 1])) customer = lines[i - 1];
+  const phoneRegex=/\(\d{3}\)\s*\d{3}-\d{4}/;
+
+  for(let i=lines.length-1;i>=0;i--){
+    if(phoneRegex.test(lines[i])){
+      phone=lines[i];
+      customer=lines[i-1]||"UNKNOWN";
       break;
     }
   }
 
-  // ----- items + modifiers -----
-  // Stop when we hit totals/payment sections
-  const stopWords = new Set([
-    "Total", "Savings", "Cash", "Shop Online", "Order status", "Pickup location"
-  ]);
+  // --------------------
+  // ITEMS
+  // --------------------
+  const items=[];
+  let current=null;
 
-  const items = [];
-  let currentItem = null;
+  for(let i=0;i<lines.length;i++){
 
-  const isMoney = (s) => /^\$?\d+(\.\d{2})?$/.test(s);
-  const isNoiseLine = (s) =>
-    stopWords.has(s) ||
-    /^Discount:/i.test(s) ||
-    /^Reg Price$/i.test(s) ||
-    /^Order #/i.test(s);
+    const l=lines[i];
 
-  const isModifierLine = (s) =>
-    /^[▪•◦]/.test(s) ||          // bullets
-    /^➕/.test(s) ||              // plus icon
-    /^\+/.test(s);               // plus sign fallback
+    if(
+  !l.startsWith("$") &&
+  !l.includes("Estimated") &&
+  !l.includes("Pickup") &&
+  !l.includes("Delivery") &&
+  !l.includes("Savings") &&
+  !l.includes("Total") &&
+  !l.includes("Notes") &&
+  !phoneRegex.test(l) &&
+  !l.match(/^\d+$/) &&
+  l.length > 3
+){
+  current={item:`1x ${l}`,modifiers:[]};
+  items.push(current);
+  continue;
+}
 
-  // Heuristic: an item name is a line that:
-  // - is not money / not noise
-  // - within next 6 lines there is a money line (Square lists price below item)
-  function looksLikeItemName(i) {
-    const s = lines[i];
-    if (!s) return false;
-    if (isMoney(s)) return false;
-    if (isModifierLine(s)) return false;
-    if (isNoiseLine(s)) return false;
+    if(
+      current &&
+      (
+        l.startsWith("▪") ||
+        l.startsWith("➕") ||
+        l.startsWith("+")
+      )
+    ){
 
-    // lookahead for a price nearby
-    for (let k = 1; k <= 6; k++) {
-      if (!lines[i + k]) break;
-      if (isMoney(lines[i + k].replace(/[^\d.$]/g, ""))) return true;
-      if (/^\$\d/.test(lines[i + k])) return true;
-    }
-    return false;
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const s = lines[i];
-
-    if (stopWords.has(s) || /^Total$/i.test(s) || /^Savings$/i.test(s)) break;
-
-    if (looksLikeItemName(i)) {
-      currentItem = { item: `1x ${s}`, modifiers: [] };
-      items.push(currentItem);
-      continue;
-    }
-
-    if (currentItem && isModifierLine(s)) {
-      const cleaned = s
-        .replace(/^[▪•◦]\s*/g, "")
-        .replace(/^➕\s*/g, "+ ")
-        .replace(/^\+\s*/g, "+ ")
-        .trim();
-      if (cleaned) currentItem.modifiers.push(cleaned);
+      current.modifiers.push(
+        l.replace(/^[▪➕+]\s*/,"").trim()
+      );
     }
   }
 
-  return {
+  return{
     customer,
     orderType,
     phone,
-    totalItems: String(items.length),
-    estimate, // will be printed on its own line
-    note,     // will be printed under Total Items only if exists
+    totalItems:items.length.toString(),
+    estimate,
+    note,
     items
   };
 }
@@ -345,7 +332,41 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
 
   return Buffer.concat(buffers);
 }
+function getSquarePlain(payload){
 
+  function walk(part){
+
+    if(!part) return "";
+
+    if(part.mimeType === "text/plain" && part.body?.data){
+
+      let raw = Buffer
+        .from(part.body.data,"base64")
+        .toString("utf8");
+
+      // REMOVE SOFT WRAPS
+      raw = raw.replace(/=\r?\n/g,"");
+
+      // DECODE =20 etc
+      raw = raw.replace(/=([A-Fa-f0-9]{2})/g,
+        (_,hex)=>String.fromCharCode(parseInt(hex,16))
+      );
+
+      return raw;
+    }
+
+    if(part.parts){
+      for(const p of part.parts){
+        const r = walk(p);
+        if(r) return r;
+      }
+    }
+
+    return "";
+  }
+
+  return walk(payload);
+}
 // --------------------
 // CHECK EMAIL (GH + SQ)
 // --------------------
@@ -398,7 +419,9 @@ async function checkEmail() {
     if (platform === "SQ") {
       // Use text/plain for Square (THIS FIXES YOUR WRONG INFO ISSUE)
       const plain = getPlainBody(msg.data.payload);
-      parsed = parseSquareFromPlain(plain);
+      parsed = parseSquare(
+  decodeQuotedPrintable(plain)
+);
     }
 
     if (!parsed) return;
