@@ -8,7 +8,7 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // PRINT JOB QUEUE
 // --------------------
-let jobs = new Map();
+let activeJobs = new Map();
 let pending = [];
 
 // --------------------
@@ -296,14 +296,12 @@ phone = ghParsed.phone;
 totalItems = ghParsed.totalItems;
 items = ghParsed.items;
 
-    const jobBuffer = buildReceipt(customer, orderType, phone, totalItems, items);
+    const id = Date.now().toString();
 
-const token = Date.now().toString(); // 🔑 UNIQUE TOKEN EACH EMAIL
+activeJobs.set(id, buildReceipt(customer, orderType, phone, totalItems, items));
+pending.push(id);
 
-jobs.set(token, jobBuffer);
-pending.push(token);
-
-console.log("QUEUE ADDED:", token);
+console.log("QUEUE ADDED:", id);
 
     await gmail.users.messages.modify({
       userId:"me",
@@ -350,46 +348,48 @@ app.post("/starcloudprnt", (req, res) => {
 
   console.log("PRINTER POLLED");
 
-  if(pending.length === 0){
-    return res.json({ jobReady:false });
+  if (pending.length > 0) {
+
+    const next = pending[0];
+
+    return res.json({
+      jobReady: true,
+      mediaTypes: ["application/vnd.star.starprnt"],
+      jobToken: next
+    });
   }
 
-  const token = pending[0];
-
-  res.json({
-    jobReady:true,
-    mediaTypes:["application/vnd.star.starprnt"],
-    jobToken:token
-  });
-
+  res.json({ jobReady:false });
 });
-
 
 app.get("/starcloudprnt", (req, res) => {
 
   const token =
-  req.query.token ||
-  req.query.jobToken ||
-  req.query.jobid;   // ⭐ THIS FIXES IT
+    req.query.token ||
+    req.query.jobToken ||
+    req.query.jobid;
 
   console.log("PRINTER REQUESTED:", token);
   console.log("PENDING:", pending);
 
-  if (token && jobs.has(token)) {
-
-    const job = jobs.get(token);
-
-    jobs.delete(token);
-    pending = pending.filter(t => t !== token);
-
-    res.setHeader("Content-Type","application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control","no-store");
-
-    return res.send(job);
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
   }
 
-  res.status(204).send();
+  const job = activeJobs.get(token);
+
+  // ⭐ SEND FIRST
+  res.setHeader("Content-Type","application/vnd.star.starprnt");
+  res.setHeader("Content-Length", job.length);
+  res.setHeader("Cache-Control","no-store");
+
+  res.send(job);
+
+  // ⭐ DELETE AFTER SEND
+  activeJobs.delete(token);
+  pending = pending.filter(t => t !== token);
+
+  console.log("PRINTED:", token);
 });
 
 // --------------------
