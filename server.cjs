@@ -334,17 +334,23 @@ function parseSquareHTML(html){
   // -------------------------
   let note = "";
 
-  $('*:contains("Notes")').each((i,el)=>{
-    const next = $(el).parent().next().text().trim();
-    if(next && next.length < 120){ // avoid footer junk
-      note = next;
-    }
-  });
+  const note = $('div:contains("Notes")')
+  .first()
+  .parent()
+  .next()
+  .text()
+  .trim();
 
   // -------------------------
   // ESTIMATE
   // -------------------------
   let estimate = "";
+
+const pickupLabel = $('div:contains("Estimated Pickup Time")').first();
+
+if(pickupLabel.length){
+  estimate = pickupLabel.parent().next().text().trim();
+}
   let orderType = "Square Pickup";
 
   const pickup = $('*:contains("Estimated Pickup Time")')
@@ -367,50 +373,43 @@ function parseSquareHTML(html){
   // ITEMS + MODIFIERS (FIXED)
   // -------------------------
   const items = [];
-  let current = null;
-  let totalCount = 0;
+let current = null;
 
-  $('tr').each((i,row)=>{
+$('tr').each((i,tr)=>{
 
-    // 🟢 ITEM ROW
-    if($(row).hasClass('item-row')){
+  const itemName = $(tr)
+    .find('div.p')
+    .first()
+    .text()
+    .trim();
 
-      const name = $(row)
-        .find('.item-name')
-        .first()
-        .text()
-        .trim();
+  const isModifier = $(tr)
+    .find('td.item-modifier-name')
+    .length > 0;
 
-      let qty = $(row)
-        .find('.item-quantity')
-        .first()
-        .text()
-        .trim();
+  // MODIFIER
+  if(isModifier && current){
+    const mod = itemName.replace(/^▪️/,'').trim();
+    if(mod) current.modifiers.push(mod);
+    return;
+  }
 
-      qty = parseInt(qty) || 1;
+  // ITEM NAME (IGNORE TOTAL / TAX / DISCOUNT)
+  if(
+    itemName &&
+    !itemName.includes("$") &&
+    !itemName.toLowerCase().includes("tax") &&
+    !itemName.toLowerCase().includes("discount") &&
+    !itemName.toLowerCase().includes("order total")
+  ){
+    current = {
+      item:`1x ${itemName}`,
+      modifiers:[]
+    };
+    items.push(current);
+  }
 
-      totalCount += qty;
-
-      current = {
-        item:`${qty}x ${name}`,
-        modifiers:[]
-      };
-
-      items.push(current);
-    }
-
-    // 🟣 MODIFIER ROW
-    if($(row).hasClass('modifier-row') && current){
-
-      const mod = $(row)
-        .find('.item-modifier-name p')
-        .text()
-        .trim();
-
-      if(mod) current.modifiers.push(mod);
-    }
-
-  });
+});
 
   return{
     customer,
