@@ -318,16 +318,18 @@ function parseSquareHTML(html) {
   // CUSTOMER (Arthur Ju)
   // -------------------------
   // In your email this is inside table.table-date-and-tenders, left column
-  let customer =
-    $("table.table-date-and-tenders td.half-col-left div.p").first().text().trim() ||
-    "UNKNOWN";
+  let phone = "";
+  let customer = "UNKNOWN";
 
-  // -------------------------
-  // PHONE (stop before email)
-  // -------------------------
-  let phone = $("a[href^='tel:']").first().text().trim();
-  const m = phone.match(phoneRegex);
-  phone = m ? m[0] : "";
+  $('td').each((i,el)=>{
+    const txt = $(el).text().trim();
+
+    const match = txt.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
+    if(match){
+      phone = match[0]; // ONLY phone, stop before email
+      customer = $(el).prev().text().trim() || "UNKNOWN";
+    }
+  });
 
   // -------------------------
   // NOTE (same <tr>: label + value)
@@ -382,15 +384,18 @@ function parseSquareHTML(html) {
     }
 
     // MODIFIER ROW (only if we already have an item)
-    if (!current) return;
+    const isModifier = $(tr).find('td.item-modifier-name').length > 0;
 
-    const leftText = $tr.find("td.half-col-left").first().text().replace(/\s+/g, " ").trim();
+  const name = $(tr).find('div.p').first().text().trim();
 
-    // bullets Square uses for modifiers
-    if (/^[▪️➕]/.test(leftText)) {
-      const mod = leftText.replace(/^[▪️➕]\s*/, "").trim();
-      if (mod) current.modifiers.push(mod);
-    }
+  if(!name) return;
+
+  // MODIFIER
+  if(isModifier && current){
+    const mod = name.replace(/^➕▪️/,'').trim();
+    if(mod) current.modifiers.push(mod);
+    return;
+  }
   });
 
   // total items = number of item rows
