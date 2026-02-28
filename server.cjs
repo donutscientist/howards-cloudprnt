@@ -263,19 +263,6 @@ for(let i=start;i<lines.length;i++){
   }
 }
 
-    if(
-      current &&
-      (
-        l.startsWith("▪") ||
-        l.startsWith("➕") ||
-        l.startsWith("+")
-      )
-    ){
-
-      current.modifiers.push(
-        l.replace(/^[▪➕+]\s*/,"").trim()
-      );continue;
-    }
   }
 
   return{
