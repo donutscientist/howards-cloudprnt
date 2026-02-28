@@ -256,13 +256,28 @@ function parseSquareHTML(html) {
 
     // NEW ITEM
     if ($tr.hasClass("item-row")) {
-      const name = $tr.find("h2.item-name").first().text().trim();
-      if (!name) return;
 
-      current = { item: `1x ${name}`, modifiers: [] };
-      items.push(current);
-      return;
-    }
+  let name = $tr.find("h2.item-name").first().text().trim();
+  if (!name) return;
+
+  let qty = 1;
+
+  // check if Square injected qty like:
+  // "Dozen Donut Holes × 4"
+  // OR decoded garbage: "Dozen Donut Holes c\ 4"
+  let match =
+    name.match(/[x×]\s*(\d+)\s*$/i) ||
+    name.match(/c\\\s*(\d+)\s*$/i);
+
+  if (match) {
+    qty = parseInt(match[1]);
+    name = name.replace(match[0], "").trim();
+  }
+
+  current = { item: `${qty}x ${name}`, modifiers: [] };
+  items.push(current);
+  return;
+}
 
     // MODIFIER ROW (only if we already have an item)
     const isModifier = $(tr).find('td.item-modifier-name').length > 0;
