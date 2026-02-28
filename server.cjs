@@ -308,6 +308,92 @@ function parseSquare(body) {
 // RECEIPT BUILDER
 // NOTE placement: directly under Total Items
 // --------------------
+
+function parseSquareHTML(html){
+
+  const $ = cheerio.load(html);
+
+  // -------------------------
+  // CUSTOMER + PHONE
+  // -------------------------
+  let phone = $('a[href^="tel:"]').first().text().trim();
+
+  let customer = "UNKNOWN";
+
+  $('td').each((i,el)=>{
+    const txt = $(el).text().trim();
+    if(/\(\d{3}\)\s*\d{3}-\d{4}/.test(txt)){
+      phone = txt;
+      customer = $(el).prev().text().trim() || "UNKNOWN";
+    }
+  });
+
+  // -------------------------
+  // ESTIMATED TIME
+  // -------------------------
+  let estimate = "";
+  let orderType = "Square Pickup";
+
+  const pickup = $('*:contains("Estimated Pickup Time")').next().text().trim();
+  const delivery = $('*:contains("Estimated Delivery Time")').next().text().trim();
+
+  if(pickup){
+    estimate = pickup;
+    orderType = "Square Pickup";
+  }
+
+  if(delivery){
+    estimate = delivery;
+    orderType = "Square Delivery";
+  }
+
+  // -------------------------
+  // NOTE
+  // -------------------------
+  let note = "";
+  const noteLabel = $('*:contains("Notes")').first();
+  if(noteLabel.length){
+    note = noteLabel.next().text().trim();
+  }
+
+  // -------------------------
+  // ITEMS
+  // -------------------------
+  const items = [];
+
+  $('tr').each((i,tr)=>{
+
+    const tds = $(tr).find('td');
+
+    if(tds.length < 2) return;
+
+    const name = $(tds[0]).text().trim();
+    const price = $(tds[1]).text().trim();
+
+    if(!name || !price.startsWith("$")) return;
+    if(name.toLowerCase().includes("order total")) return;
+    if(name.toLowerCase().includes("tax")) return;
+    if(name.toLowerCase().includes("tip")) return;
+    if(name.toLowerCase().includes("discount")) return;
+
+    items.push({
+      item:`1x ${name}`,
+      modifiers:[]
+    });
+
+  });
+
+  return{
+    customer,
+    orderType,
+    phone,
+    totalItems:items.length.toString(),
+    estimate,
+    note,
+    items
+  };
+}
+
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
   buffers.push(Buffer.from([0x1B, 0x40])); // ESC @
@@ -453,9 +539,14 @@ async function checkEmail() {
     }
 
     if (platform === "SQ") {
-  const plain = getPlainBody(msg.data.payload);
-  const decoded = decodeQuotedPrintable(plain);
-  parsed = parseSquare(decoded);
+
+  const html = getHtmlBody(msg.data.payload)
+    .replace(/\u00A0/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ ]+/g, " ");
+
+  parsed = parseSquareHTML(html);
 }
 
     if (!parsed) return;
