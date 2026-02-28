@@ -64,33 +64,108 @@ function getBody(payload){
   return walk(payload);
 }
 
-function parseItems(body) {
+function parseSquare(body){
+
+  body = body
+    .replace(/\r/g,"")
+    .replace(/\u00A0/g," ")
+    .replace(/[ ]+/g," ");
+
+  // --------------------
+  // CUSTOMER
+  // --------------------
+  const custMatch = body.match(/\n\s*([A-Z][a-z]+\s[A-Z][a-z]+)\s*\n/);
+  const customer = custMatch ? custMatch[1] : "UNKNOWN";
+
+  // --------------------
+  // PHONE
+  // --------------------
+  const phoneMatch = body.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
+  const phone = phoneMatch ? phoneMatch[0] : "";
+
+  // --------------------
+  // ESTIMATED TIME
+  // --------------------
+  let estimate = "";
+  let orderType = "Square Pickup";
+
+  const pickup = body.match(/Pickup\s+time\s*:\s*(.+)/i);
+  const delivery = body.match(/Delivery\s+time\s*:\s*(.+)/i);
+
+  if(pickup){
+    estimate = pickup[1].trim();
+    orderType = "Square Pickup";
+  }
+
+  if(delivery){
+    estimate = delivery[1].trim();
+    orderType = "Square Delivery";
+  }
+
+  // --------------------
+  // NOTE
+  // --------------------
+  let note = "";
+
+  const noteMatch = body.match(/Note\s*:\s*(.+)/i);
+  if(noteMatch){
+    note = noteMatch[1].trim();
+  }
+
+  // --------------------
+  // ITEMS
+  // --------------------
+  const items = [];
+
   const lines = body.split("\n");
 
-  const output = [];
   let currentItem = null;
 
-  for (let raw of lines) {
-    let line = (raw || "").trim();
-    if (!line) continue;
+  for(let i=0;i<lines.length;i++){
 
-    // ITEM like "2x Chocolate Donut"  (no space between qty and x)
-    if (/^\d+x\s+/.test(line)) {
-      currentItem = { item: line, modifiers: [] };
-      output.push(currentItem);
+    let line = lines[i].trim();
+
+    if(!line) continue;
+
+    // ITEM BLOCK:
+    // 1
+    // x
+    // Dozen Box
+    if(/^\d+$/.test(line) && lines[i+1]?.trim().toLowerCase() === "x"){
+
+      let qty = line;
+      let name = (lines[i+2] || "").trim();
+
+      if(name){
+
+        currentItem = {
+          item:`${qty}x ${name}`,
+          modifiers:[]
+        };
+
+        items.push(currentItem);
+      }
+
       continue;
     }
 
-    // MODIFIER like "+ Extra Glaze" or "+ 2x Sprinkles"
-    if (line.startsWith("+") && currentItem) {
-      let mod = line.replace(/^\+\s*/, "").trim();
+    // MODIFIER
+    if(line.startsWith("▪") && currentItem){
 
-
-      currentItem.modifiers.push(mod);
+      let mod = line.replace(/^▪️?/,'').trim();
+      if(mod) currentItem.modifiers.push(mod);
     }
   }
 
-  return output;
+  return {
+    customer,
+    orderType,
+    phone,
+    totalItems:items.length.toString(),
+    estimate,
+    note,
+    items
+  };
 }
 
 function parseGrubHub(html) {
@@ -174,7 +249,7 @@ function parseGrubHub(html) {
 // - orderType
 // - EVERY modifier
 // --------------------
-function buildReceipt(customer, orderType, phone, totalItems, items) {
+function buildReceipt(customer, orderType, phone, totalItems, items, estimate="", note="") {
 
   const buffers = [];
 
@@ -210,6 +285,24 @@ function buildReceipt(customer, orderType, phone, totalItems, items) {
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
   buffers.push(Buffer.from(" " + "Total Items:" + " " + totalItems + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
+  
+  // --------------------
+// ESTIMATED TIME
+// --------------------
+if(estimate){
+  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  buffers.push(Buffer.from(" " + estimate + "\n"));
+  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+}
+
+// --------------------
+// NOTE (ONLY IF EXISTS)
+// --------------------
+if(note){
+  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  buffers.push(Buffer.from(" NOTE: " + note + "\n"));
+  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+}
   
   // --------------------
   // ITEMS + MODIFIERS
@@ -251,18 +344,28 @@ async function checkEmail() {
     // -------------------------
 
     const gh = await gmail.users.messages.list({
-      userId:"me",
-      q:"is:unread label:GH_PRINT",
-      maxResults:1
-    });
+  userId:"me",
+  q:"is:unread label:GH_PRINT",
+  maxResults:1
+});
+
+const sq = await gmail.users.messages.list({
+  userId:"me",
+  q:"is:unread label:SQ_PRINT",
+  maxResults:1
+});
 
     let messageId = null;
-    let platform = null;
+let platform = null;
 
-    if (gh.data.messages) {
-      messageId = gh.data.messages[0].id;
-      platform = "GH";
-    }
+if(gh.data.messages){
+  messageId = gh.data.messages[0].id;
+  platform = "GH";
+}
+else if(sq.data.messages){
+  messageId = sq.data.messages[0].id;
+  platform = "SQ";
+}
 
     if (!messageId) return;
 
@@ -281,6 +384,8 @@ let orderType="UNKNOWN";
 let phone="";
 let totalItems="";
 let items=[];
+let estimate="";
+let note="";
 
     if (platform === "GH") {
       body = body
@@ -298,8 +403,15 @@ items = ghParsed.items;
 
     const id = Date.now().toString();
 
-activeJobs.set(id, buildReceipt(customer, orderType, phone, totalItems, items));
-pending.push(id);
+activeJobs.set(id, buildReceipt(
+  customer,
+  orderType,
+  phone,
+  totalItems,
+  items,
+  estimate,
+  note
+));
 
 console.log("QUEUE ADDED:", id);
 
