@@ -244,22 +244,34 @@ function parseSquareHTML(html) {
   if(!name) return;
 
   // MODIFIER
-if (isModifier && current) {
+const modCell = $(tr).find('td.item-modifier-name');
 
-  let mod = name
+if (modCell.length && current) {
 
-    // remove weird bullet icons Square injects
-    .replace(/^[➕▪️]+\s*/g, '')
+  const divs = modCell.find('div.p');
 
-    // remove price in parentheses at end  ($3.00)
-    .replace(/\s*\(\$[\d.]+\)\s*$/g, '')
+  if (!divs.length) return;
 
+  let name = $(divs[0]).text().trim();
+  let qty  = divs.length > 1 ? $(divs[1]).text().trim() : "";
+
+  // CLEAN NAME
+  name = name
+    .replace(/^[➕▪️]+\s*/g, '') // remove bullets
+    .replace(/\s*\(\$[\d.]+\)\s*/g, '')           // remove ($3.00)
     .trim();
 
-  if (mod) current.modifiers.push(mod);
+  // EXTRACT QTY (x2)
+  const m = qty.match(/x(\d+)/i);
+  const count = m ? m[1] : "1";
+
+  if (name) {
+    current.modifiers.push(count === "1" ? name : `${count}x ${name}`);
+  }
 
   return;
-  }
+}
+
   });
 
   // total items = number of item rows
