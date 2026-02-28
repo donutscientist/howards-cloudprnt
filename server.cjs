@@ -332,12 +332,12 @@ function parseSquareHTML(html){
   // -------------------------
   // NOTE (FIXED)
   // -------------------------
-  let note = "";
-
-  const note = $('div:contains("Notes")')
+  let note = $('div:contains("Notes")')
   .first()
   .parent()
+  .parent()
   .next()
+  .find('div.p')
   .text()
   .trim();
 
@@ -345,29 +345,26 @@ function parseSquareHTML(html){
   // ESTIMATE
   // -------------------------
   let estimate = "";
+let orderType = "Square Pickup";
 
-const pickupLabel = $('div:contains("Estimated Pickup Time")').first();
+const pickupRow = $('div:contains("Estimated Pickup Time")')
+  .first()
+  .closest('tr')
+  .next();
 
-if(pickupLabel.length){
-  estimate = pickupLabel.parent().next().text().trim();
+if(pickupRow.length){
+  estimate = pickupRow.find('div.p').text().trim();
 }
-  let orderType = "Square Pickup";
 
-  const pickup = $('*:contains("Estimated Pickup Time")')
-    .parent().next().text().trim();
+const deliveryRow = $('div:contains("Estimated Delivery Time")')
+  .first()
+  .closest('tr')
+  .next();
 
-  const delivery = $('*:contains("Estimated Delivery Time")')
-    .parent().next().text().trim();
-
-  if(pickup){
-    estimate = pickup;
-    orderType = "Square Pickup";
-  }
-
-  if(delivery){
-    estimate = delivery;
-    orderType = "Square Delivery";
-  }
+if(deliveryRow.length){
+  estimate = deliveryRow.find('div.p').text().trim();
+  orderType = "Square Delivery";
+}
 
   // -------------------------
   // ITEMS + MODIFIERS (FIXED)
@@ -377,40 +374,46 @@ let current = null;
 
 $('tr').each((i,tr)=>{
 
-  const itemName = $(tr)
-    .find('div.p')
-    .first()
-    .text()
-    .trim();
+  const isModifier = $(tr).find('td.item-modifier-name').length > 0;
 
-  const isModifier = $(tr)
-    .find('td.item-modifier-name')
-    .length > 0;
+  const name = $(tr).find('div.p').first().text().trim();
+
+  if(!name) return;
 
   // MODIFIER
   if(isModifier && current){
-    const mod = itemName.replace(/^▪️/,'').trim();
+    const mod = name.replace(/^▪️/,'').trim();
     if(mod) current.modifiers.push(mod);
     return;
   }
 
-  // ITEM NAME (IGNORE TOTAL / TAX / DISCOUNT)
-  if(
-    itemName &&
-    !itemName.includes("$") &&
-    !itemName.toLowerCase().includes("tax") &&
-    !itemName.toLowerCase().includes("discount") &&
-    !itemName.toLowerCase().includes("order total")
-  ){
+  // CHECK NEXT ROW HAS PRICE (REAL ITEM)
+  const nextRow = $(tr).next().text();
+
+  if(/\$\d/.test(nextRow)){
+
     current = {
-      item:`1x ${itemName}`,
+      item:`1x ${name}`,
       modifiers:[]
     };
+
     items.push(current);
   }
 
 });
+const grouped = {};
 
+items.forEach(i=>{
+  const n = i.item.replace(/^1x /,'');
+  grouped[n] = (grouped[n]||0)+1;
+});
+
+const finalItems = Object.entries(grouped).map(([name,qty])=>({
+  item:`${qty}x ${name}`,
+  modifiers:[]
+}));
+
+const totalCount = finalItems.length;
   return{
     customer,
     orderType,
