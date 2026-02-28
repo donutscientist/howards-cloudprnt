@@ -311,7 +311,7 @@ const COLS = 32;
 
 function cut32(text, indent=""){
 
-  if(!text) return "";
+  if(!text) return indent;
 
   text = text.replace(/\s+/g," ").trim();
 
@@ -372,7 +372,7 @@ for (const order of items) {
   buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
 
   buffers.push(Buffer.from(
-    cut32(order.item,"  ") + "\n"
+    cut32(order.item," ") + "\n"
   ));
 
   buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
