@@ -371,23 +371,27 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // Items
+  // Items //
   for (const order of items) {
     buffers.push(Buffer.from("\n"));
-    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
-    buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
     const itemLines = wrap32(order.item);
 
 itemLines.forEach(l=>{
-  buffers.push(Buffer.from(l + "\n"));
-});
-    buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
-    buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
-    for (const mod of order.modifiers || []) {
-      const modLines = wrap32(mod);
 
-modLines.forEach((l,i)=>{
+  buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
+  buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
+
+  buffers.push(Buffer.from(" " + l + "\n"));
+
+  buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
+  buffers.push(Buffer.from([0x1B,0x45,0])); // BOLD OFF
+});
+
+//MOD//
+    const modLines = wrap32(mod);
+
+modLines.forEach(l=>{
   buffers.push(Buffer.from("    " + l + "\n"));
 });
     }
