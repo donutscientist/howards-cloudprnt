@@ -166,7 +166,8 @@ function parseSquare(body){
     .replace(/\u00A0/g," ")
     .replace(/[ ]+/g," ");
 
-  const lines = body
+  // ⭐ ONLY KEEP ORDER BLOCK (CUT OFF RECEIPT FOOTER)
+body = body.split("Reply to this email")[0];
     .split("\n")
     .map(l=>l.trim())
     .filter(Boolean);
@@ -226,6 +227,7 @@ function parseSquare(body){
     const l=lines[i];
 
     if(
+  current === null &&
   !l.startsWith("$") &&
   !l.includes("Estimated") &&
   !l.includes("Pickup") &&
@@ -233,11 +235,19 @@ function parseSquare(body){
   !l.includes("Savings") &&
   !l.includes("Total") &&
   !l.includes("Notes") &&
+  !l.includes("Customer") &&
+  !l.includes("Phone") &&
+  !l.includes("Reply") &&
+  !l.includes("View") &&
+  !l.includes("http") &&
   !phoneRegex.test(l) &&
-  !l.match(/^\d+$/) &&
-  l.length > 3
+  l.length > 3 &&
+  !l.match(/^\d+$/)
 ){
-  current={item:`1x ${l}`,modifiers:[]};
+  current = {
+    item: `1x ${l}`,
+    modifiers: []
+  };
   items.push(current);
   continue;
 }
@@ -253,7 +263,7 @@ function parseSquare(body){
 
       current.modifiers.push(
         l.replace(/^[▪➕+]\s*/,"").trim()
-      );
+      );continue;
     }
   }
 
