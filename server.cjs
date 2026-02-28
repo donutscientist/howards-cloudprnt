@@ -25,18 +25,16 @@ const gmail = google.gmail({ version: "v1", auth });
 // HELPERS: BASE64URL + QUOTED-PRINTABLE
 // --------------------
 function decodeBase64Url(data) {
+  if (!data) return "";
   return Buffer.from(
-    data
-      .replace(/-/g, "+")
-      .replace(/_/g, "/")
-      .padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
+    data.replace(/-/g, "+").replace(/_/g, "/").padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
     "base64"
   ).toString("utf8");
 }
 
 function decodeQuotedPrintable(input) {
   if (!input) return "";
-  let s = input.replace(/=\r?\n/g, "");
+  let s = input.replace(/=\r?\n/g, ""); // remove soft breaks
   s = s.replace(/=([A-Fa-f0-9]{2})/g, (_, hex) =>
     String.fromCharCode(parseInt(hex, 16))
   );
@@ -76,7 +74,7 @@ function getPlainBody(payload) {
 }
 
 // --------------------
-// GRUBHUB PARSER (YOUR SAME)
+// GRUBHUB PARSER (UNCHANGED)
 // --------------------
 function parseGrubHub(html) {
   const $ = cheerio.load(html);
@@ -147,151 +145,117 @@ function parseGrubHub(html) {
 }
 
 // --------------------
-// SQUARE PARSER (FIXED: text/plain, NO CUT, BLOCK PARSE)
+// SQUARE PARSER (TEXT/PLAIN ONLY)
 // --------------------
-function parseSquare(plainText) {
-  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
-  const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+function parseSquare(plainBody) {
+  let body = (plainBody || "").replace(/\r/g, "\n").replace(/\u00A0/g, " ");
 
-  // Normalize
-  const lines = (plainText || "")
-    .replace(/\r/g, "\n")
-    .replace(/\u00A0/g, " ")
+  // ✅ ONLY cut at true footer markers (DON'T cut at "squareup.com")
+  const footerRe = /(Reply to this email|View your full receipt)/i;
+  const m = body.match(footerRe);
+  if (m && m.index !== undefined) body = body.slice(0, m.index);
+
+  const lines = body
     .split("\n")
-    .map(l => l.replace(/\s+/g, " ").trim())
+    .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  // Helpers
-  const isNoise = (l) => {
-    const s = l.toLowerCase();
-    return (
-      s.includes("reply to this email") ||
-      s.includes("view your full receipt") ||
-      s.includes("your full receipt has") ||
-      s.includes("run your own business") ||
-      s.includes("get started with square") ||
-      s.includes("square just got more") ||
-      s.includes("receipt settings") ||
-      s.includes("square privacy") ||
-      s.includes("learn more") ||
-      s.includes("update preferences") ||
-      s.includes("squareup.com") ||
-      s.includes("a.squareupmessaging.com") ||
-      s.startsWith("http")
-    );
-  };
-
-  const isMoney = (l) => /^\$\d/.test(l);
-  const isSummaryLine = (l) => {
-    const s = l.toLowerCase();
-    return (
-      s.includes("subtotal") ||
-      s.includes("tax") ||
-      s.includes("tip") ||
-      s.includes("total") ||
-      s.includes("discount") ||
-      s.includes("savings") ||
-      s === "reg price" ||
-      s.includes("order #") ||
-      s.includes("shop online")
-    );
-  };
-
-  // Order type + estimate
+  // Estimate + type
   let estimate = "";
   let orderType = "Square Pickup";
   for (let i = 0; i < lines.length; i++) {
-    const s = lines[i].toLowerCase();
-    if (s === "estimated pickup time") {
+    const t = lines[i].toLowerCase();
+    if (t === "estimated pickup time") {
       estimate = lines[i + 1] || "";
       orderType = "Square Pickup";
     }
-    if (s === "estimated delivery time") {
+    if (t === "estimated delivery time") {
       estimate = lines[i + 1] || "";
       orderType = "Square Delivery";
     }
   }
 
-  // Note
+  // Notes
   let note = "";
   for (let i = 0; i < lines.length; i++) {
-    const s = lines[i].toLowerCase();
-    if (s === "notes" || s === "notes:") {
-      note = lines[i + 1] || "";
+    const t = lines[i].toLowerCase();
+    if (t === "notes" || t === "notes:") {
+      note = (lines[i + 1] || "").trim();
       break;
     }
   }
 
-  // Customer block (use LAST “real” phone, not store phone)
-  // Store phone is often (901) 213-1100; customer is usually different.
+  // Customer + phone: use LAST phone = customer phone (store phone appears earlier)
+  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
+  const phones = lines.flatMap((l) => (l.match(phoneRegex) ? [l.match(phoneRegex)[0]] : []));
+  const phone = phones.length ? phones[phones.length - 1] : "";
+
   let customer = "UNKNOWN";
-  let phone = "";
-  let customerEmail = "";
-
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(phoneRegex);
-    if (m) {
-      const candidatePhone = m[0];
-      // Skip obvious store phone if it appears
-      if (candidatePhone === "(901) 213-1100") continue;
-
-      phone = candidatePhone;
-      const maybeName = lines[i - 1] || "";
-      customer = maybeName && !isNoise(maybeName) ? maybeName : "UNKNOWN";
-
-      // often email is next line after phone
-      const maybeEmail = lines[i + 1] || "";
-      if (emailRegex.test(maybeEmail)) customerEmail = maybeEmail;
-
+  if (phone) {
+    // find the line that contains the last phone, then walk upward for a clean name
+    let idx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (phoneRegex.test(lines[i])) { idx = i; break; }
+    }
+    for (let j = idx - 1; j >= 0; j--) {
+      const cand = lines[j];
+      if (!cand) continue;
+      if (cand.includes("@")) continue;
+      if (/howard/i.test(cand)) continue;
+      if (/order|pickup|delivery|estimated|notes/i.test(cand.toLowerCase())) continue;
+      customer = cand;
       break;
     }
   }
 
-  // Items parsing:
-  // Detect item header lines (not noise, not money, not summary),
-  // then collect bullet/plus modifier lines that follow.
+  // Items: Square pattern is Name then a $ line soon after (often "$0.00"), then "Reg Price"
   const items = [];
   let current = null;
+
+  const isJunk = (l) => {
+    const s = l.toLowerCase();
+    return (
+      s.startsWith("$") ||
+      s === "reg price" ||
+      s.includes("discount") ||
+      s.includes("savings") ||
+      s.includes("subtotal") ||
+      s.includes("tax") ||
+      s.includes("tip") ||
+      s.includes("total") ||
+      s.includes("order summary") ||
+      s.includes("estimated") ||
+      s.includes("notes") ||
+      s.includes("reply") ||
+      s.includes("view") ||
+      s.includes("http") ||
+      phoneRegex.test(l)
+    );
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
 
-    if (isNoise(l)) continue;
-
-    // modifier lines
-    if (current && (/^[▪➕+]/.test(l))) {
+    // modifiers
+    if (current && /^[▪➕+]/.test(l)) {
       const mod = l.replace(/^[▪➕+]\s*/, "").trim();
       if (mod) current.modifiers.push(mod);
       continue;
     }
 
-    // ignore money + summary junk
-    if (isMoney(l) || isSummaryLine(l) || phoneRegex.test(l)) continue;
-
-    // candidate item name:
-    // look ahead a bit: Square usually shows "$0.00" then "Reg Price" then "$X.XX"
-    const look = lines.slice(i + 1, i + 12).join(" ");
-    const hasPriceSoon = /\$\d/.test(look) && look.toLowerCase().includes("reg price");
-
-    if (hasPriceSoon) {
-      current = { item: `1x ${l}`, modifiers: [] };
-      items.push(current);
+    // item name
+    if (!isJunk(l)) {
+      const lookahead = lines.slice(i + 1, i + 6).join(" ");
+      const hasPriceSoon = /\$\d/.test(lookahead); // catches $0.00 too
+      if (hasPriceSoon) {
+        current = { item: `1x ${l}`, modifiers: [] };
+        items.push(current);
+      }
     }
   }
 
-  // de-dupe modifiers a bit
-  for (const it of items) {
-    const counter = {};
-    for (const m of it.modifiers) counter[m] = (counter[m] || 0) + 1;
-    it.modifiers = Object.entries(counter).map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
-  }
-
-  // If you want email printed too, append to customer line:
-  const customerLine =
-    customerEmail ? `${customer} (${customerEmail})` : customer;
-
   return {
-    customer: customerLine,
+    customer,
     orderType,
     phone,
     totalItems: String(items.length),
@@ -302,11 +266,11 @@ function parseSquare(plainText) {
 }
 
 // --------------------
-// RECEIPT BUILDER (UNCHANGED)
+// RECEIPT BUILDER
 // --------------------
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
-  buffers.push(Buffer.from([0x1B, 0x40])); // ESC @
+  buffers.push(Buffer.from([0x1B, 0x40])); // init
 
   buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" " + customer + "\n"));
@@ -346,7 +310,6 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from(order.item + "\n"));
     buffers.push(Buffer.from([0x1B, 0x2D, 0x00]));
     buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
-
     for (const mod of order.modifiers || []) {
       buffers.push(Buffer.from("    " + mod + "\n"));
     }
@@ -355,6 +318,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   buffers.push(Buffer.from("\n"));
   buffers.push(Buffer.from([0x1B, 0x64, 0x03]));
   buffers.push(Buffer.from([0x1D, 0x56, 0x00]));
+
   return Buffer.concat(buffers);
 }
 
@@ -408,6 +372,7 @@ async function checkEmail() {
     }
 
     if (platform === "SQ") {
+      // ✅ Square: parse text/plain (this is where your real order is)
       const plainRaw = getPlainBody(msg.data.payload);
       const plain = decodeQuotedPrintable(plainRaw);
 
@@ -490,6 +455,9 @@ app.get("/starcloudprnt", (req, res) => {
   console.log("PRINTED:", token);
 });
 
+// --------------------
+// LOOP
+// --------------------
 setInterval(checkEmail, 5000);
 
 app.listen(process.env.PORT || 3000, () => {
