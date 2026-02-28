@@ -403,15 +403,9 @@ items = ghParsed.items;
 
     const id = Date.now().toString();
 
-activeJobs.set(id, buildReceipt(
-  customer,
-  orderType,
-  phone,
-  totalItems,
-  items,
-  estimate,
-  note
-));
+activeJobs.set(id, buildReceipt(customer, orderType, phone, totalItems, items, estimate, note));
+pending.push(id);
+
 
 console.log("QUEUE ADDED:", id);
 
