@@ -371,29 +371,35 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // Items //
-  for (const order of items) {
-    buffers.push(Buffer.from("\n"));
-    buffers.push(Buffer.from(" "));
-    const itemLines = wrap32(order.item);
+  // --------------------
+// ITEMS + MODIFIERS
+// --------------------
+for (const order of items) {
 
-itemLines.forEach(l=>{
+  buffers.push(Buffer.from("\n"));
+
+  // -------- ITEM --------
+  const itemLines = wrap32(order.item);
 
   buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
   buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
 
-  buffers.push(Buffer.from(" " + l + "\n"));
+  itemLines.forEach(l=>{
+    buffers.push(Buffer.from(l + "\n"));
+  });
 
   buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
   buffers.push(Buffer.from([0x1B,0x45,0])); // BOLD OFF
-});
 
-//MOD//
+  // -------- MODIFIERS --------
+  for(const mod of order.modifiers || []){
+
     const modLines = wrap32(mod);
 
-modLines.forEach(l=>{
-  buffers.push(Buffer.from("    " + l + "\n"));
-});
+    modLines.forEach(l=>{
+      buffers.push(Buffer.from("    " + l + "\n")); // 2 space indent
+    });
+
     }
   }
 
