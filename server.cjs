@@ -168,7 +168,10 @@ body = body
   .replace(/\r/g,"")
   .replace(/\u00A0/g," ")
   .replace(/[ ]+/g," ");
-
+const lines = body
+  .split("\n")
+  .map(l=>l.trim())
+  .filter(Boolean);
   // --------------------
   // ESTIMATE + ORDER TYPE
   // --------------------
@@ -217,36 +220,45 @@ body = body
   // ITEMS
   // --------------------
   const items=[];
-  let current=null;
+let start = lines.findIndex(l=>l==="Order Summary");
 
-  for(let i=0;i<lines.length;i++){
+if(start === -1) return {
+  customer,
+  orderType,
+  phone,
+  totalItems:"0",
+  estimate,
+  note,
+  items:[]
+};
 
-    const l=lines[i];
+for(let i=start;i<lines.length;i++){
 
-    if(
-  current === null &&
-  !l.startsWith("$") &&
-  !l.includes("Estimated") &&
-  !l.includes("Pickup") &&
-  !l.includes("Delivery") &&
-  !l.includes("Savings") &&
-  !l.includes("Total") &&
-  !l.includes("Notes") &&
-  !l.includes("Customer") &&
-  !l.includes("Phone") &&
-  !l.includes("Reply") &&
-  !l.includes("View") &&
-  !l.includes("http") &&
-  !phoneRegex.test(l) &&
-  l.length > 3 &&
-  !l.match(/^\d+$/)
-){
-  current = {
-    item: `1x ${l}`,
-    modifiers: []
-  };
-  items.push(current);
-  continue;
+  const l = lines[i];
+
+  if(
+    !l.startsWith("$") &&
+    !l.includes("Estimated") &&
+    !l.includes("Pickup") &&
+    !l.includes("Delivery") &&
+    !l.includes("Savings") &&
+    !l.includes("Total") &&
+    !l.includes("Notes") &&
+    !l.includes("Customer") &&
+    !l.includes("Phone") &&
+    !l.includes("Reply") &&
+    !l.includes("View") &&
+    !l.includes("http") &&
+    !phoneRegex.test(l) &&
+    l.length > 3 &&
+    !l.match(/^\d+$/) &&
+    lines[i+1]?.startsWith("$")
+  ){
+    items.push({
+      item:`1x ${l}`,
+      modifiers:[]
+    });
+  }
 }
 
     if(
