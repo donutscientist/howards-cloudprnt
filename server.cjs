@@ -309,85 +309,77 @@ if (isModifier && current) {
 
 const COLS = 32;
 
-function cut32(text, indent=""){
+// make printer-safe ASCII + remove control chars
+function toAscii(s) {
+  if (!s) return "";
+  return String(s)
+    .replace(/\u00A0/g, " ")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-")
+    .replace(/×/g, "x")
+    .replace(/[^\x20-\x7E]/g, "")     // strip non-ascii
+    .replace(/[\x00-\x1F\x7F]/g, "")  // strip control
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if(!text) return indent;
-
-  text = text.replace(/\s+/g," ").trim();
-
-  const usable = COLS - indent.length;
-
-  return indent + text.substring(0, usable);
+// HARD CUT (no wrap). Always <= 32 chars total INCLUDING indent.
+function cut32(text, indent = "") {
+  const t = toAscii(text);
+  const usable = Math.max(0, COLS - indent.length);
+  return indent + t.slice(0, usable);
 }
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
-  const buffers = [];
-  buffers.push(Buffer.from([0x1B, 0x40])); // ESC @
+  const b = [];
+  b.push(Buffer.from([0x1B, 0x40])); // ESC @
 
-  // Customer
-  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-  buffers.push(Buffer.from(" " + customer + "\n"));
-  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  // helper to push ONE printable line (never > 32)
+  const line = (txt, indent = "") => b.push(Buffer.from(cut32(txt, indent) + "\n", "ascii"));
 
-  // Order type
-  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-  buffers.push(Buffer.from(" " + orderType + "\n"));
-  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  // Header (ALL CUT TO 32)
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(customer, " ");  b.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(orderType, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // Phone
   if (phone) {
-    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-    buffers.push(Buffer.from(" " + phone + "\n"));
-    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(phone, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // Total Items
-  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-  buffers.push(Buffer.from(" Total Items: " + totalItems + "\n"));
-  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(`Total Items: ${totalItems}`, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // NOTE under Total Items (ONLY if exists)
   if (note) {
-    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-    buffers.push(Buffer.from(" NOTE: " + note + "\n"));
-    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+    b.push(Buffer.from([0x1B, 0x45, 0x01]));
+    line(`NOTE: ${note}`, " "); // also hard-cut
+    b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // Estimate time on its own line
   if (estimate) {
-    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
-    buffers.push(Buffer.from(" " + estimate + "\n"));
-    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(estimate, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  // --------------------
-// ITEMS + MODIFIERS
-// --------------------
-for (const order of items) {
+  // Items + modifiers
+  for (const order of items) {
+    b.push(Buffer.from("\n"));
 
-  buffers.push(Buffer.from("\n"));
+    // ITEM: keep your indentation + styles, but still hard-cut
+    b.push(Buffer.from([0x1B, 0x45, 0x01])); // bold
+    b.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline
+    line(order.item, " "); // <-- item indent (change to "  " if you want 2 spaces)
+    b.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
+    b.push(Buffer.from([0x1B, 0x45, 0x00])); // bold off
 
-  // -------- ITEM (2 indent) --------
-  buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
-  buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
-
-  buffers.push(Buffer.from(
-    cut32(order.item," ") + "\n"
-  ));
-
-  buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
-  buffers.push(Buffer.from([0x1B,0x45,0])); // BOLD OFF
-
-  // -------- MODIFIERS (4 indent) --------
-  for(const mod of order.modifiers || []){
-
-    buffers.push(Buffer.from(
-      cut32(mod,"    ") + "\n"
-    ));
-
+    // MODS: 4-space indent, hard-cut
+    for (const mod of order.modifiers || []) {
+      line(mod, "    ");
+    }
   }
+
+  b.push(Buffer.from("\n"));
+  b.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
+  b.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
+  return Buffer.concat(b);
 }
-  
 
   buffers.push(Buffer.from("\n"));
   buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
