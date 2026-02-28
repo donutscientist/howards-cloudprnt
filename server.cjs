@@ -6,10 +6,10 @@ const app = express();
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
-// PRINT JOB QUEUE
+// ADVANCED CLOUDPRNT QUEUE
 // --------------------
-let activeJobs = new Map();
-let pending = [];
+let activeJobs = new Map(); // token -> Buffer
+let pending = [];           // tokens FIFO
 
 // --------------------
 // GMAIL AUTH
@@ -19,212 +19,119 @@ const auth = new google.auth.OAuth2(
   process.env.CLIENT_SECRET
 );
 
-auth.setCredentials({
-  refresh_token: process.env.REFRESH_TOKEN,
-});
+auth.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
 
 const gmail = google.gmail({ version: "v1", auth });
 
 // --------------------
-// EMAIL BODY EXTRACT
+// HELPERS: BASE64URL + QUOTED-PRINTABLE
 // --------------------
-function decodeBase64Url(data){
+function decodeBase64Url(data) {
   return Buffer.from(
     data
-      .replace(/-/g,'+')
-      .replace(/_/g,'/')
-      .padEnd(data.length + (4 - data.length % 4) % 4,'='),
-    'base64'
-  ).toString('utf8');
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
+    "base64"
+  ).toString("utf8");
 }
 
-function getBody(payload){
+// Gmail message parts often contain quoted-printable text (with =20, soft wraps "=\n")
+function decodeQuotedPrintable(input) {
+  if (!input) return "";
 
-  function walk(part){
+  // Remove soft line breaks
+  let s = input.replace(/=\r?\n/g, "");
 
-    if(!part) return "";
+  // Convert =XX hex escapes
+  s = s.replace(/=([A-Fa-f0-9]{2})/g, (_, hex) =>
+    String.fromCharCode(parseInt(hex, 16))
+  );
 
-    if(part.mimeType==="text/html" && part.body?.data){
+  return s;
+}
 
-      return Buffer
-        .from(part.body.data,"base64")
-        .toString("utf8");
-    }
-
-    if(part.parts){
-      for(const p of part.parts){
-        const result = walk(p);
-        if(result) return result;
+// --------------------
+// GET PART BY MIME
+// --------------------
+function findPart(payload, predicate) {
+  function walk(part) {
+    if (!part) return null;
+    if (predicate(part)) return part;
+    if (part.parts) {
+      for (const p of part.parts) {
+        const found = walk(p);
+        if (found) return found;
       }
     }
-
-    return "";
+    return null;
   }
-
   return walk(payload);
 }
 
-function parseSquare(html){
-
-  const $ = cheerio.load(html);
-
-  const text = $("body").text()
-    .replace(/\r/g,"")
-    .replace(/\u00A0/g," ")
-    .replace(/[ ]+/g," ");
-
-  // ⭐ START from CUSTOMER section
-  // Square always shows phone after name
-  const start = text.search(/\(\d{3}\)\s*\d{3}-\d{4}/);
-
-  if(start === -1){
-    return {
-      customer:"UNKNOWN",
-      orderType:"Square Pickup",
-      phone:"",
-      totalItems:"0",
-      estimate:"",
-      note:"",
-      items:[]
-    };
-  }
-
-  const body = text.slice(start - 40); // grab name above phone
-
-  // --------------------
-  // CUSTOMER
-  // --------------------
-  const custMatch = body.match(/\n\s*([A-Z][a-z]+\s[A-Z][a-z]+)\s*\n/);
-  const customer = custMatch ? custMatch[1] : "UNKNOWN";
-
-  // --------------------
-  // PHONE
-  // --------------------
-  const phoneMatch = body.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
-  const phone = phoneMatch ? phoneMatch[0] : "";
-
-  // --------------------
-  // ESTIMATED TIME
-  // --------------------
-  let estimate = "";
-  let orderType = "Square Pickup";
-
-  const pickup = body.match(/Pickup\s*time\s*:\s*(.+)/i);
-  const delivery = body.match(/Delivery\s*time\s*:\s*(.+)/i);
-
-  if(pickup){
-    estimate = pickup[1].trim();
-    orderType = "Square Pickup";
-  }
-
-  if(delivery){
-    estimate = delivery[1].trim();
-    orderType = "Square Delivery";
-  }
-
-  // --------------------
-  // NOTE
-  // --------------------
-  let note = "";
-
-  const noteMatch = body.match(/Note\s*:\s*(.+)/i);
-  if(noteMatch){
-    note = noteMatch[1].trim();
-  }
-
-  // --------------------
-  // ITEMS
-  // --------------------
-  const items = [];
-  const lines = body.split("\n");
-
-  let currentItem = null;
-
-  for(let i=0;i<lines.length;i++){
-
-    let line = lines[i].trim();
-    if(!line) continue;
-
-    if(/^\d+$/.test(line) && lines[i+1]?.trim().toLowerCase() === "x"){
-
-      let qty = line;
-      let name = (lines[i+2] || "").trim();
-
-      if(name){
-        currentItem = {
-          item:`${qty}x ${name}`,
-          modifiers:[]
-        };
-        items.push(currentItem);
-      }
-      continue;
-    }
-
-    if(line.startsWith("▪") && currentItem){
-      let mod = line.replace(/^▪️?/,'').trim();
-      if(mod) currentItem.modifiers.push(mod);
-    }
-  }
-
-  return {
-    customer,
-    orderType,
-    phone,
-    totalItems:items.length.toString(),
-    estimate,
-    note,
-    items
-  };
+function getPartText(payload, mimeType) {
+  const part = findPart(payload, (p) => p.mimeType === mimeType && p.body?.data);
+  if (!part) return "";
+  return decodeBase64Url(part.body.data);
 }
 
+// Backward-compatible: keep your old behavior for GH (HTML)
+function getHtmlBody(payload) {
+  return getPartText(payload, "text/html");
+}
+
+// For Square, use text/plain (quoted printable)
+function getPlainBody(payload) {
+  return getPartText(payload, "text/plain");
+}
+
+// --------------------
+// GRUBHUB PARSER (unchanged from your working one)
+// --------------------
 function parseGrubHub(html) {
   const $ = cheerio.load(html);
 
-  // ---------- Hidden POS block (best for phone + service type) ----------
   const hidden = $('[data-section="grubhub-order-data"]');
 
   let phone =
     hidden.find('[data-field="phone"]').text().trim() ||
     $('a[href^="tel:"]').first().text().trim();
 
-  let service = hidden.find('[data-field="service-type"]').text().trim(); // "Delivery" / "Pickup"
+  let service = hidden.find('[data-field="service-type"]').text().trim();
   let orderType =
     service.toLowerCase().includes("delivery") ? "GrubHub Delivery" :
-    service.toLowerCase().includes("pickup")   ? "GrubHub Pickup" :
-    // fallback if hidden missing:
+    service.toLowerCase().includes("pickup") ? "GrubHub Pickup" :
     $('div:contains("Deliver to:")').length ? "GrubHub Delivery" :
-    $('div:contains("Pickup by:")').length  ? "GrubHub Pickup"  :
+    $('div:contains("Pickup by:")').length ? "GrubHub Pickup" :
     "GrubHub Pickup";
 
-  // ---------- Customer name from the visible “Deliver to:” line ----------
   let customer = "UNKNOWN";
-  const deliverLabel = $('div').filter((i, el) => $(el).text().trim() === "Deliver to:").first();
+  const deliverLabel = $("div").filter((i, el) => $(el).text().trim() === "Deliver to:").first();
   if (deliverLabel.length) {
-    customer = deliverLabel.next('div').text().trim() || customer;
+    customer = deliverLabel.next("div").text().trim() || customer;
   } else {
-    const pickupLabel = $('div').filter((i, el) => $(el).text().trim() === "Pickup by:").first();
-    if (pickupLabel.length) customer = pickupLabel.next('div').text().trim() || customer;
+    const pickupLabel = $("div").filter((i, el) => $(el).text().trim() === "Pickup by:").first();
+    if (pickupLabel.length) customer = pickupLabel.next("div").text().trim() || customer;
   }
 
-  // ---------- Total items from “1   item” ----------
   let totalItems = "0";
-  const totalP = $('p').filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim())).first();
+  const totalP = $("p")
+    .filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim()))
+    .first();
   if (totalP.length) {
     const m = totalP.text().replace(/\s+/g, " ").match(/(\d+)\s*item/i);
     if (m) totalItems = m[1];
   }
 
-  // ---------- Items + modifiers from visible receipt table ----------
   const items = [];
 
-  // Find item rows that look like: [qty td] [x td] [name td with bold div]
-  $('tr').each((i, tr) => {
-    const tds = $(tr).find('td');
+  $("tr").each((i, tr) => {
+    const tds = $(tr).find("td");
     if (tds.length < 3) return;
 
     const qtyTxt = $(tds[0]).text().replace(/\s+/g, " ").trim();
-    const xTxt   = $(tds[1]).text().replace(/\s+/g, " ").trim();
-    const name   = $(tds[2]).text().replace(/\s+/g, " ").trim();
+    const xTxt = $(tds[1]).text().replace(/\s+/g, " ").trim();
+    const name = $(tds[2]).text().replace(/\s+/g, " ").trim();
 
     if (!/^\d+$/.test(qtyTxt)) return;
     if (xTxt.toLowerCase() !== "x") return;
@@ -232,266 +139,306 @@ function parseGrubHub(html) {
 
     const currentItem = { item: `${qtyTxt}x ${name}`, modifiers: [] };
 
-    // modifiers are in the NEXT row, inside <li> like: "▪️12 Glazed Iced"
-    const next = $(tr).next('tr');
-    next.find('li').each((j, li) => {
+    const next = $(tr).next("tr");
+    next.find("li").each((j, li) => {
       let mod = $(li).text().replace(/\s+/g, " ").trim();
-      mod = mod.replace(/^▪️/,'').replace(/^▪/,'').trim(); // remove bullet only
-      if (mod) currentItem.modifiers.push(mod); // keep FULL string like "12 Glazed Iced"
+      mod = mod.replace(/^▪️/, "").replace(/^▪/, "").trim();
+      if (mod) currentItem.modifiers.push(mod);
     });
 
-    // group modifiers by counting duplicates
     const counter = {};
     for (const m of currentItem.modifiers) counter[m] = (counter[m] || 0) + 1;
-    currentItem.modifiers = Object.entries(counter)
-      .map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
+    currentItem.modifiers = Object.entries(counter).map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
 
     items.push(currentItem);
   });
 
-  return { customer, orderType, phone, totalItems, items };
+  return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
 }
-// --------------------
-// BUILD STARPRNT JOB (Buffer)
-// Uses "highlight" (inverted) for:
-// - customer
-// - orderType
-// - EVERY modifier
-// --------------------
-function buildReceipt(customer, orderType, phone, totalItems, items, estimate="", note="") {
 
+// --------------------
+// SQUARE PARSER (USES text/plain from the email)
+// --------------------
+function parseSquareFromPlain(plainRaw) {
+  // decode quoted-printable and normalize
+  const plain = decodeQuotedPrintable(plainRaw)
+    .replace(/\r/g, "")
+    .replace(/\u00A0/g, " ")
+    .replace(/[ ]+/g, " ");
+
+  const lines = plain
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  // ----- estimate + orderType -----
+  let estimate = "";
+  let orderType = "Square Pickup";
+
+  const idxPickup = lines.findIndex((l) => /^Estimated Pickup Time$/i.test(l));
+  const idxDelivery = lines.findIndex((l) => /^Estimated Delivery Time$/i.test(l));
+
+  if (idxDelivery !== -1 && lines[idxDelivery + 1]) {
+    estimate = lines[idxDelivery + 1];
+    orderType = "Square Delivery";
+  } else if (idxPickup !== -1 && lines[idxPickup + 1]) {
+    estimate = lines[idxPickup + 1];
+    orderType = "Square Pickup";
+  }
+
+  // ----- note (only if present) -----
+  let note = "";
+  const idxNotes = lines.findIndex((l) => /^Notes$/i.test(l));
+  if (idxNotes !== -1 && lines[idxNotes + 1]) {
+    const maybe = lines[idxNotes + 1];
+    // Avoid accidentally grabbing "Order status" link text if formats change
+    if (!/^Order status/i.test(maybe)) note = maybe;
+  }
+
+  // ----- customer + phone: take the LAST phone match (customer block is near bottom) -----
+  const phoneRe = /\(\d{3}\)\s*\d{3}-\d{4}/;
+  let phone = "";
+  let customer = "UNKNOWN";
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (phoneRe.test(lines[i])) {
+      phone = lines[i].match(phoneRe)[0];
+      // previous non-empty line is customer name
+      if (lines[i - 1] && !phoneRe.test(lines[i - 1])) customer = lines[i - 1];
+      break;
+    }
+  }
+
+  // ----- items + modifiers -----
+  // Stop when we hit totals/payment sections
+  const stopWords = new Set([
+    "Total", "Savings", "Cash", "Shop Online", "Order status", "Pickup location"
+  ]);
+
+  const items = [];
+  let currentItem = null;
+
+  const isMoney = (s) => /^\$?\d+(\.\d{2})?$/.test(s);
+  const isNoiseLine = (s) =>
+    stopWords.has(s) ||
+    /^Discount:/i.test(s) ||
+    /^Reg Price$/i.test(s) ||
+    /^Order #/i.test(s);
+
+  const isModifierLine = (s) =>
+    /^[▪•◦]/.test(s) ||          // bullets
+    /^➕/.test(s) ||              // plus icon
+    /^\+/.test(s);               // plus sign fallback
+
+  // Heuristic: an item name is a line that:
+  // - is not money / not noise
+  // - within next 6 lines there is a money line (Square lists price below item)
+  function looksLikeItemName(i) {
+    const s = lines[i];
+    if (!s) return false;
+    if (isMoney(s)) return false;
+    if (isModifierLine(s)) return false;
+    if (isNoiseLine(s)) return false;
+
+    // lookahead for a price nearby
+    for (let k = 1; k <= 6; k++) {
+      if (!lines[i + k]) break;
+      if (isMoney(lines[i + k].replace(/[^\d.$]/g, ""))) return true;
+      if (/^\$\d/.test(lines[i + k])) return true;
+    }
+    return false;
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const s = lines[i];
+
+    if (stopWords.has(s) || /^Total$/i.test(s) || /^Savings$/i.test(s)) break;
+
+    if (looksLikeItemName(i)) {
+      currentItem = { item: `1x ${s}`, modifiers: [] };
+      items.push(currentItem);
+      continue;
+    }
+
+    if (currentItem && isModifierLine(s)) {
+      const cleaned = s
+        .replace(/^[▪•◦]\s*/g, "")
+        .replace(/^➕\s*/g, "+ ")
+        .replace(/^\+\s*/g, "+ ")
+        .trim();
+      if (cleaned) currentItem.modifiers.push(cleaned);
+    }
+  }
+
+  return {
+    customer,
+    orderType,
+    phone,
+    totalItems: String(items.length),
+    estimate, // will be printed on its own line
+    note,     // will be printed under Total Items only if exists
+    items
+  };
+}
+
+// --------------------
+// RECEIPT BUILDER
+// NOTE placement: directly under Total Items
+// --------------------
+function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
+  buffers.push(Buffer.from([0x1B, 0x40])); // ESC @
 
-  // --------------------
-  // INIT
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x40])); // ESC @
+  // Customer
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+  buffers.push(Buffer.from(" " + customer + "\n"));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // --------------------
-  // BOLD CUSTOMER NAME
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + customer + "\n")); 
-  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
-
-  // --------------------
-  // ORDER TYPE (BOLD ONLY)
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
+  // Order type
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" " + orderType + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-  // --------------------
   // Phone
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + phone + "\n")); 
-  buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
+  if (phone) {
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+    buffers.push(Buffer.from(" " + phone + "\n"));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  }
 
-  // --------------------
-  // Total Items (BOLD ONLY)
-  // --------------------
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + "Total Items:" + " " + totalItems + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
-  
-  // --------------------
-// ESTIMATED TIME
-// --------------------
-if(estimate){
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + estimate + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
-}
+  // Total Items
+  buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+  buffers.push(Buffer.from(" Total Items: " + totalItems + "\n"));
+  buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
-// --------------------
-// NOTE (ONLY IF EXISTS)
-// --------------------
-if(note){
-  buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" NOTE: " + note + "\n"));
-  buffers.push(Buffer.from([0x1B,0x45,0x00]));
-}
-  
-  // --------------------
-  // ITEMS + MODIFIERS
-  // --------------------
+  // NOTE under Total Items (ONLY if exists)
+  if (note) {
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+    buffers.push(Buffer.from(" NOTE: " + note + "\n"));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  }
+
+  // Estimate time on its own line
+  if (estimate) {
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
+    buffers.push(Buffer.from(" " + estimate + "\n"));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
+  }
+
+  // Items
   for (const order of items) {
-
-    // ITEM (UNDERLINE ONLY)
     buffers.push(Buffer.from("\n"));
-    buffers.push(Buffer.from([0x1B,0x45,0x01]));
+    buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
-    buffers.push(Buffer.from([0x1B,0x2D,0x01])); // underline on
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
     buffers.push(Buffer.from(order.item + "\n"));
-    buffers.push(Buffer.from([0x1B,0x2D,0x00])); // underline off
-    buffers.push(Buffer.from([0x1B,0x21,0x00]));
-    // MODIFIERS (NORMAL)
-    for (let mod of order.modifiers) {
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
+    buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
+    for (const mod of order.modifiers || []) {
       buffers.push(Buffer.from("    " + mod + "\n"));
     }
   }
 
-  // --------------------
-  // FEED + CUT
-  // --------------------
   buffers.push(Buffer.from("\n"));
-  buffers.push(Buffer.from([0x1B,0x64,0x03])); // feed 3
-  buffers.push(Buffer.from([0x1D,0x56,0x00])); // cut
+  buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
+  buffers.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
 
   return Buffer.concat(buffers);
 }
 
 // --------------------
-// CHECK EMAIL
+// CHECK EMAIL (GH + SQ)
 // --------------------
 async function checkEmail() {
   try {
-
-    // -------------------------
-    // CHECK LABELS
-    // -------------------------
-
     const gh = await gmail.users.messages.list({
-  userId:"me",
-  q:"is:unread label:GH_PRINT",
-  maxResults:1
-});
+      userId: "me",
+      q: "is:unread label:GH_PRINT",
+      maxResults: 1
+    });
 
-const sq = await gmail.users.messages.list({
-  userId:"me",
-  q:"is:unread label:SQ_PRINT",
-  maxResults:1
-});
+    const sq = await gmail.users.messages.list({
+      userId: "me",
+      q: "is:unread label:SQ_PRINT",
+      maxResults: 1
+    });
 
     let messageId = null;
-let platform = null;
+    let platform = null;
 
-if(gh.data.messages){
-  messageId = gh.data.messages[0].id;
-  platform = "GH";
-}
-else if(sq.data.messages){
-  messageId = sq.data.messages[0].id;
-  platform = "SQ";
-}
-
-    if (!messageId) return;
+    if (gh.data.messages?.length) {
+      messageId = gh.data.messages[0].id;
+      platform = "GH";
+    } else if (sq.data.messages?.length) {
+      messageId = sq.data.messages[0].id;
+      platform = "SQ";
+    } else {
+      return;
+    }
 
     console.log("EMAIL FOUND:", platform);
 
     const msg = await gmail.users.messages.get({
-      userId:"me",
-      id:messageId,
-      format:"full"
+      userId: "me",
+      id: messageId,
+      format: "full"
     });
 
-    let body = getBody(msg.data.payload);
+    let parsed = null;
 
-    let customer="UNKNOWN";
-let orderType="UNKNOWN";
-let phone="";
-let totalItems="";
-let items=[];
-let estimate="";
-let note="";
+    if (platform === "GH") {
+      const html = getHtmlBody(msg.data.payload)
+        .replace(/\u00A0/g, " ")
+        .replace(/\t/g, " ")
+        .replace(/\r/g, "")
+        .replace(/[ ]+/g, " ");
+      parsed = parseGrubHub(html);
+    }
 
-    if(platform === "GH"){
+    if (platform === "SQ") {
+      // Use text/plain for Square (THIS FIXES YOUR WRONG INFO ISSUE)
+      const plain = getPlainBody(msg.data.payload);
+      parsed = parseSquareFromPlain(plain);
+    }
 
-  body = body
-    .replace(/\u00A0/g," ")
-    .replace(/\t/g," ")
-    .replace(/\r/g,"")
-    .replace(/[ ]+/g," ");
+    if (!parsed) return;
 
-  const ghParsed = parseGrubHub(body);
+    const id = Date.now().toString();
+    const jobBuf = buildReceipt(
+      parsed.customer,
+      parsed.orderType,
+      parsed.phone,
+      parsed.totalItems,
+      parsed.items,
+      parsed.estimate,
+      parsed.note
+    );
 
-  customer = ghParsed.customer;
-  orderType = ghParsed.orderType;
-  phone = ghParsed.phone;
-  totalItems = ghParsed.totalItems;
-  items = ghParsed.items;
-}
+    activeJobs.set(id, jobBuf);
+    pending.push(id);
 
-if(platform === "SQ"){
+    console.log("QUEUE ADDED:", id);
 
-  const sqParsed = parseSquare(body);
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] }
+    });
 
-  customer = sqParsed.customer;
-  orderType = sqParsed.orderType;
-  phone = sqParsed.phone;
-  totalItems = sqParsed.totalItems;
-  items = sqParsed.items;
-  estimate = sqParsed.estimate;
-  note = sqParsed.note;
-}
-
-// ⭐ THIS MUST BE OUTSIDE BOTH
-const id = Date.now().toString();
-
-activeJobs.set(id, buildReceipt(
-  customer,
-  orderType,
-  phone,
-  totalItems,
-  items,
-  estimate,
-  note
-));
-
-pending.push(id);
-
-console.log("QUEUE ADDED:", id);
-
-await gmail.users.messages.modify({
-  userId:"me",
-  id:messageId,
-  requestBody:{ removeLabelIds:["UNREAD"] }
-});
-
-console.log("PRINT JOB ADDED");
-
+    console.log("PRINT JOB ADDED");
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
   }
 }
-    
 
 // --------------------
-// TEST ROUTE
+// ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
-app.get("/createjob", (req, res) => {
-  // Fixed syntax: Buffer.from([...]) then push, then close properly
-  jobs.push(
-    Buffer.from([
-      0x1b, 0x40,
-      0x1b, 0x61, 0x01,
-      0x1b, 0x21, 0x30,
-      0x48, 0x6f, 0x77, 0x61, 0x72,
-      0x64, 0x27, 0x73, 0x20, 0x44,
-      0x6f, 0x6e, 0x75, 0x74, 0x73,
-      0x0a, 0x0a,
-      0x1b, 0x64, 0x03,
-      0x1d, 0x56, 0x00,
-    ])
-  );
-
-  console.log("JOB CREATED");
-  res.send("Job created");
-});
-
-// --------------------
-// ADVANCED CLOUDPRNT
-// --------------------
-
 app.post("/starcloudprnt", (req, res) => {
-
   console.log("PRINTER POLLED");
 
   if (pending.length > 0) {
-
     const next = pending[0];
-
     return res.json({
       jobReady: true,
       mediaTypes: ["application/vnd.star.starprnt"],
@@ -499,15 +446,11 @@ app.post("/starcloudprnt", (req, res) => {
     });
   }
 
-  res.json({ jobReady:false });
+  res.json({ jobReady: false });
 });
 
 app.get("/starcloudprnt", (req, res) => {
-
-  const token =
-    req.query.token ||
-    req.query.jobToken ||
-    req.query.jobid;
+  const token = req.query.token || req.query.jobToken || req.query.jobid;
 
   console.log("PRINTER REQUESTED:", token);
   console.log("PENDING:", pending);
@@ -518,16 +461,13 @@ app.get("/starcloudprnt", (req, res) => {
 
   const job = activeJobs.get(token);
 
-  // ⭐ SEND FIRST
-  res.setHeader("Content-Type","application/vnd.star.starprnt");
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
   res.setHeader("Content-Length", job.length);
-  res.setHeader("Cache-Control","no-store");
-
+  res.setHeader("Cache-Control", "no-store");
   res.send(job);
 
-  // ⭐ DELETE AFTER SEND
   activeJobs.delete(token);
-  pending = pending.filter(t => t !== token);
+  pending = pending.filter((t) => t !== token);
 
   console.log("PRINTED:", token);
 });
