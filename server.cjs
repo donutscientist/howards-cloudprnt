@@ -270,7 +270,7 @@ function parseSquare(body) {
     );
   };
 
-  for (let i = start + 1; i < end; i++) {
+  for (let i = Math.max(0, start); i < end; i++) {
     const l = lines[i];
 
     // modifiers
@@ -313,11 +313,7 @@ function parseSquareHTML(html){
 
   const $ = cheerio.load(html);
 
-  // -------------------------
-  // CUSTOMER + PHONE
-  // -------------------------
   let phone = $('a[href^="tel:"]').first().text().trim();
-
   let customer = "UNKNOWN";
 
   $('td').each((i,el)=>{
@@ -328,9 +324,6 @@ function parseSquareHTML(html){
     }
   });
 
-  // -------------------------
-  // ESTIMATED TIME
-  // -------------------------
   let estimate = "";
   let orderType = "Square Pickup";
 
@@ -347,38 +340,56 @@ function parseSquareHTML(html){
     orderType = "Square Delivery";
   }
 
-  // -------------------------
-  // NOTE
-  // -------------------------
   let note = "";
   const noteLabel = $('*:contains("Notes")').first();
   if(noteLabel.length){
     note = noteLabel.next().text().trim();
   }
 
-  // -------------------------
-  // ITEMS
-  // -------------------------
+  // ---------------------------------------
+  // ⭐ ONLY PARSE RECEIPT TABLE
+  // ---------------------------------------
   const items = [];
+  let current = null;
 
-  $('tr').each((i,tr)=>{
+  $('table').each((i,table)=>{
 
-    const tds = $(tr).find('td');
+    const tableText = $(table).text();
 
-    if(tds.length < 2) return;
+    // skip marketing tables
+    if(!tableText.includes("$")) return;
 
-    const name = $(tds[0]).text().trim();
-    const price = $(tds[1]).text().trim();
+    $(table).find('tr').each((j,tr)=>{
 
-    if(!name || !price.startsWith("$")) return;
-    if(name.toLowerCase().includes("order total")) return;
-    if(name.toLowerCase().includes("tax")) return;
-    if(name.toLowerCase().includes("tip")) return;
-    if(name.toLowerCase().includes("discount")) return;
+      const tds = $(tr).find('td');
 
-    items.push({
-      item:`1x ${name}`,
-      modifiers:[]
+      if(tds.length < 2) return;
+
+      const name = $(tds[0]).text().trim();
+      const price = $(tds[1]).text().trim();
+
+      if(!price.startsWith("$")) return;
+      if(name.toLowerCase().includes("order total")) return;
+      if(name.toLowerCase().includes("tax")) return;
+      if(name.toLowerCase().includes("tip")) return;
+      if(name.toLowerCase().includes("discount")) return;
+      if(name.toLowerCase().includes("subtotal")) return;
+      if(name.toLowerCase().includes("total")) return;
+
+      // modifier line
+      if(name.startsWith("•") && current){
+        current.modifiers.push(name.replace("•","").trim());
+        return;
+      }
+
+      // item line
+      current = {
+        item:`1x ${name}`,
+        modifiers:[]
+      };
+
+      items.push(current);
+
     });
 
   });
@@ -540,19 +551,13 @@ async function checkEmail() {
 
     if (platform === "SQ") {
 
-  const plainRaw = getPlainBody(msg.data.payload);
+  const html = getHtmlBody(msg.data.payload)
+    .replace(/\u00A0/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ ]+/g, " ");
 
-  const plain = decodeQuotedPrintable(plainRaw);
-
-  parsed = parseSquare(plain);
-
-  console.log(
-    "SQ PARSED:",
-    parsed.customer,
-    parsed.phone,
-    parsed.totalItems,
-    parsed.items.map(i=>i.item)
-  );
+  parsed = parseSquareHTML(html);
 }
 
     if (!parsed) return;
