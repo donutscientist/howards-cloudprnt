@@ -367,11 +367,15 @@ app.post("/starcloudprnt", (req, res) => {
 
 app.get("/starcloudprnt", (req, res) => {
 
-  const token = req.query.jobToken;
+  const token =
+  req.query.token ||
+  req.query.jobToken ||
+  req.query.jobid;   // ⭐ THIS FIXES IT
 
   console.log("PRINTER REQUESTED:", token);
+  console.log("PENDING:", pending);
 
-  if(token && jobs.has(token)){
+  if (token && jobs.has(token)) {
 
     const job = jobs.get(token);
 
