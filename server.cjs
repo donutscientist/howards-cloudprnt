@@ -364,12 +364,16 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
 
   buffers.push(Buffer.from("\n"));
 
+  for (const order of items) {
+
+  buffers.push(Buffer.from("\n"));
+
   // -------- ITEM (2 indent) --------
   buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
   buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
 
   buffers.push(Buffer.from(
-    cut32(" ",order.item) + "\n"
+    cut32(order.item,"  ") + "\n"
   ));
 
   buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
@@ -379,7 +383,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   for(const mod of order.modifiers || []){
 
     buffers.push(Buffer.from(
-      cut32("    ",mod) + "\n"
+      cut32(mod,"    ") + "\n"
     ));
 
   }
