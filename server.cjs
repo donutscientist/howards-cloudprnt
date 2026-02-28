@@ -161,16 +161,13 @@ function parseGrubHub(html) {
 // --------------------
 function parseSquare(body){
 
-  body = body
-    .replace(/\r/g,"")
-    .replace(/\u00A0/g," ")
-    .replace(/[ ]+/g," ");
-
-  // ⭐ ONLY KEEP ORDER BLOCK (CUT OFF RECEIPT FOOTER)
+  // ⭐ CUT OFF RECEIPT FOOTER FIRST
 body = body.split("Reply to this email")[0];
-    .split("\n")
-    .map(l=>l.trim())
-    .filter(Boolean);
+
+body = body
+  .replace(/\r/g,"")
+  .replace(/\u00A0/g," ")
+  .replace(/[ ]+/g," ");
 
   // --------------------
   // ESTIMATE + ORDER TYPE
