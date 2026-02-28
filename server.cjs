@@ -440,7 +440,7 @@ await gmail.users.messages.modify({
   requestBody:{ removeLabelIds:["UNREAD"] }
 });
 
-console.log("PRINT JOB ADDED");}
+console.log("PRINT JOB ADDED");
 
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
