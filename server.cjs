@@ -161,17 +161,19 @@ function parseGrubHub(html) {
 // --------------------
 function parseSquare(body){
 
-  // ⭐ CUT OFF RECEIPT FOOTER FIRST
-body = body.split("Reply to this email")[0];
+  // CUT OFF FOOTER
+  body = body.split("Reply to this email")[0];
 
-body = body
-  .replace(/\r/g,"")
-  .replace(/\u00A0/g," ")
-  .replace(/[ ]+/g," ");
-const lines = body
-  .split("\n")
-  .map(l=>l.trim())
-  .filter(Boolean);
+  body = body
+    .replace(/\r/g,"")
+    .replace(/\u00A0/g," ")
+    .replace(/[ ]+/g," ");
+
+  // ⭐ CREATE LINES FIRST
+  const lines = body
+    .split("\n")
+    .map(l => l.trim())
+    .filter(Boolean);
   // --------------------
   // ESTIMATE + ORDER TYPE
   // --------------------
