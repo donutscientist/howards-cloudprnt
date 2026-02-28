@@ -309,120 +309,94 @@ function parseSquare(body) {
 // NOTE placement: directly under Total Items
 // --------------------
 
-function parseSquareHTML(html){
-
+function parseSquareHTML(html) {
   const $ = cheerio.load(html);
 
-  // -------------------------
-  // CUSTOMER + PHONE (FIXED)
-  // -------------------------
-  let phone = "";
-  let customer = "UNKNOWN";
+  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
 
-  $('td').each((i,el)=>{
-    const txt = $(el).text().trim();
+  // -------------------------
+  // CUSTOMER (Arthur Ju)
+  // -------------------------
+  // In your email this is inside table.table-date-and-tenders, left column
+  let customer =
+    $("table.table-date-and-tenders td.half-col-left div.p").first().text().trim() ||
+    "UNKNOWN";
 
-    const match = txt.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
-    if(match){
-      phone = match[0]; // ONLY phone, stop before email
-      customer = $(el).prev().text().trim() || "UNKNOWN";
+  // -------------------------
+  // PHONE (stop before email)
+  // -------------------------
+  let phone = $("a[href^='tel:']").first().text().trim();
+  const m = phone.match(phoneRegex);
+  phone = m ? m[0] : "";
+
+  // -------------------------
+  // NOTE (same <tr>: label + value)
+  // -------------------------
+  let note = "";
+  const noteRow = $("div.pickup-fulfillment-title.p:contains('Notes')").first().closest("tr");
+  if (noteRow.length) {
+    note = noteRow.find("div.pickup-info.p").first().text().trim();
+  }
+
+  // -------------------------
+  // ESTIMATE + ORDER TYPE
+  // -------------------------
+  let estimate = "";
+  let orderType = "Square Pickup";
+
+  const pickupRow = $("div.pickup-fulfillment-title.p:contains('Estimated Pickup Time')")
+    .first()
+    .closest("tr");
+  const deliveryRow = $("div.pickup-fulfillment-title.p:contains('Estimated Delivery Time')")
+    .first()
+    .closest("tr");
+
+  if (pickupRow.length) {
+    estimate = pickupRow.find("div.pickup-info.p").first().text().trim();
+    orderType = "Square Pickup";
+  } else if (deliveryRow.length) {
+    estimate = deliveryRow.find("div.pickup-info.p").first().text().trim();
+    orderType = "Square Delivery";
+  }
+
+  // -------------------------
+  // ITEMS + MODIFIERS (ONLY tr.item-row are items)
+  // -------------------------
+  const items = [];
+  let current = null;
+
+  const table = $("table.table-payment-info").first();
+  const rows = table.find("tr");
+
+  rows.each((_, tr) => {
+    const $tr = $(tr);
+
+    // NEW ITEM
+    if ($tr.hasClass("item-row")) {
+      const name = $tr.find("h2.item-name").first().text().trim();
+      if (!name) return;
+
+      current = { item: `1x ${name}`, modifiers: [] };
+      items.push(current);
+      return;
+    }
+
+    // MODIFIER ROW (only if we already have an item)
+    if (!current) return;
+
+    const leftText = $tr.find("td.half-col-left").first().text().replace(/\s+/g, " ").trim();
+
+    // bullets Square uses for modifiers
+    if (/^[▪️➕]/.test(leftText)) {
+      const mod = leftText.replace(/^[▪️➕]\s*/, "").trim();
+      if (mod) current.modifiers.push(mod);
     }
   });
 
-  // -------------------------
-  // NOTE (FIXED)
-  // -------------------------
-  let note = $('div:contains("Notes")')
-  .first()
-  .parent()
-  .parent()
-  .next()
-  .find('div.p')
-  .text()
-  .trim();
+  // total items = number of item rows
+  const totalItems = String(items.length);
 
-  // -------------------------
-  // ESTIMATE
-  // -------------------------
-  let estimate = "";
-let orderType = "Square Pickup";
-
-const pickupRow = $('div:contains("Estimated Pickup Time")')
-  .first()
-  .closest('tr')
-  .next();
-
-if(pickupRow.length){
-  estimate = pickupRow.find('div.p').text().trim();
-}
-
-const deliveryRow = $('div:contains("Estimated Delivery Time")')
-  .first()
-  .closest('tr')
-  .next();
-
-if(deliveryRow.length){
-  estimate = deliveryRow.find('div.p').text().trim();
-  orderType = "Square Delivery";
-}
-
-  // -------------------------
-  // ITEMS + MODIFIERS (FIXED)
-  // -------------------------
-  const items = [];
-let current = null;
-
-$('tr').each((i,tr)=>{
-
-  const isModifier = $(tr).find('td.item-modifier-name').length > 0;
-
-  const name = $(tr).find('div.p').first().text().trim();
-
-  if(!name) return;
-
-  // MODIFIER
-  if(isModifier && current){
-    const mod = name.replace(/^▪️/,'').trim();
-    if(mod) current.modifiers.push(mod);
-    return;
-  }
-
-  // CHECK NEXT ROW HAS PRICE (REAL ITEM)
-  const nextRow = $(tr).next().text();
-
-  if(/\$\d/.test(nextRow)){
-
-    current = {
-      item:`1x ${name}`,
-      modifiers:[]
-    };
-
-    items.push(current);
-  }
-
-});
-const grouped = {};
-
-items.forEach(i=>{
-  const n = i.item.replace(/^1x /,'');
-  grouped[n] = (grouped[n]||0)+1;
-});
-
-const finalItems = Object.entries(grouped).map(([name,qty])=>({
-  item:`${qty}x ${name}`,
-  modifiers:[]
-}));
-
-const totalCount = finalItems.length;
-  return{
-    customer,
-    orderType,
-    phone,
-    totalItems:totalCount.toString(),
-    estimate,
-    note,
-    items
-  };
+  return { customer, orderType, phone, totalItems, estimate, note, items };
 }
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
