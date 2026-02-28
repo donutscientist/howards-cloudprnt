@@ -309,26 +309,15 @@ if (isModifier && current) {
 
 const COLS = 32;
 
-function wrapWithIndent(text, indent=""){
-  
-  if(!text) return [];
+function cut32(text, indent=""){
+
+  if(!text) return "";
 
   text = text.replace(/\s+/g," ").trim();
 
-  const usable = COLS - indent.length; // THIS IS THE FIX
-  const lines = [];
+  const usable = COLS - indent.length;
 
-  while(text.length > usable){
-    let cut = text.lastIndexOf(" ", usable);
-    if(cut <= 0) cut = usable;
-
-    lines.push(indent + text.substring(0,cut));
-    text = text.substring(cut).trim();
-  }
-
-  if(text.length) lines.push(indent + text);
-
-  return lines;
+  return indent + text.substring(0, usable);
 }
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
@@ -375,25 +364,23 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
 
   buffers.push(Buffer.from("\n"));
 
-  // -------- ITEM (2 space indent) --------
+  // -------- ITEM (2 indent) --------
   buffers.push(Buffer.from([0x1B,0x45,1])); // BOLD ON
   buffers.push(Buffer.from([0x1B,0x2D,1])); // UNDERLINE ON
 
-  const itemLines = wrapWithIndent(order.item,"  "); // 2 indent
-  itemLines.forEach(l=>{
-    buffers.push(Buffer.from(l + "\n"));
-  });
+  buffers.push(Buffer.from(
+    cut32(" ",order.item) + "\n"
+  ));
 
   buffers.push(Buffer.from([0x1B,0x2D,0])); // UNDERLINE OFF
   buffers.push(Buffer.from([0x1B,0x45,0])); // BOLD OFF
 
-  // -------- MODIFIERS (4 space indent) --------
+  // -------- MODIFIERS (4 indent) --------
   for(const mod of order.modifiers || []){
 
-    const modLines = wrapWithIndent(mod,"    "); // 4 indent
-    modLines.forEach(l=>{
-      buffers.push(Buffer.from(l + "\n"));
-    });
+    buffers.push(Buffer.from(
+      cut32("    ",mod) + "\n"
+    ));
 
   }
 }
