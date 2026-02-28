@@ -551,7 +551,7 @@ async function checkEmail() {
 
     if (!parsed) return;
 
-    const id = Date.now().toString();
+    const id = Math.random().toString(36).substring(2,10);
     const jobBuf = buildReceipt(
       parsed.customer,
       parsed.orderType,
