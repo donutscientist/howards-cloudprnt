@@ -113,35 +113,60 @@ function parseGrubHub(html) {
 
   const items = [];
 
-  $("tr").each((i, tr) => {
-    const tds = $(tr).find("td");
-    if (tds.length < 3) return;
+  $('tr').each((i,tr)=>{
 
-    const qtyTxt = $(tds[0]).text().replace(/\s+/g, " ").trim();
-    const xTxt = $(tds[1]).text().replace(/\s+/g, " ").trim();
-    const name = $(tds[2]).text().replace(/\s+/g, " ").trim();
+  const tds = $(tr).find('td');
+  if(tds.length < 2) return;
 
-    if (!/^\d+$/.test(qtyTxt)) return;
-    if (xTxt.toLowerCase() !== "x") return;
-    if (!name) return;
+  const name = $(tds[0]).text().trim();
+  const price = $(tds[1]).text().trim();
 
-    const currentItem = { item: `${qtyTxt}x ${name}`, modifiers: [] };
+  if(!name || !price.startsWith("$")) return;
 
-    const next = $(tr).next("tr");
-    next.find("li").each((j, li) => {
-      let mod = $(li).text().replace(/\s+/g, " ").trim();
-      mod = mod.replace(/^▪️/, "").replace(/^▪/, "").trim();
-      if (mod) currentItem.modifiers.push(mod);
-    });
+  const lower = name.toLowerCase();
 
-    const counter = {};
-    for (const m of currentItem.modifiers) counter[m] = (counter[m] || 0) + 1;
-    currentItem.modifiers = Object.entries(counter).map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
+  // 🚫 REMOVE NON-ITEM ROWS
+  if(
+    lower.includes("reg price") ||
+    lower.includes("discount") ||
+    lower.includes("savings") ||
+    lower.includes("subtotal") ||
+    lower.includes("tax") ||
+    lower.includes("tip") ||
+    lower.includes("total") ||
+    lower.includes("order") ||
+    lower.includes("payment") ||
+    lower.includes("cash") ||
+    lower.includes("visa") ||
+    lower.includes("mastercard") ||
+    lower.includes("shop online") ||
+    lower.includes("run your own business") ||
+    lower.includes("square") ||
+    lower.includes("privacy") ||
+    lower.includes("receipt") ||
+    lower.includes("preference") ||
+    lower.includes("get started")
+  ) return;
 
-    items.push(currentItem);
+  items.push({
+    item:`1x ${name}`,
+    modifiers:[]
   });
 
-  return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
+});
+
+const unique = [];
+const seen = new Set();
+
+for(const it of items){
+  if(!seen.has(it.item)){
+    seen.add(it.item);
+    unique.push(it);
+  }
+}
+
+  return { customer, orderType, phone, totalItems:unique.length.toString(),
+items:unique, items, estimate: "", note: "" };
 }
 
 // --------------------
