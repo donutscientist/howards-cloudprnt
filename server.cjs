@@ -8,7 +8,8 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // PRINT JOB QUEUE
 // --------------------
-let jobs = [];
+let jobs = new Map();
+let pending = [];
 
 // --------------------
 // GMAIL AUTH
@@ -295,7 +296,14 @@ phone = ghParsed.phone;
 totalItems = ghParsed.totalItems;
 items = ghParsed.items;
 
-    jobs.push(buildReceipt(customer, orderType, phone, totalItems, items));
+    const jobBuffer = buildReceipt(customer, orderType, phone, totalItems, items);
+
+const token = Date.now().toString(); // 🔑 UNIQUE TOKEN EACH EMAIL
+
+jobs.set(token, jobBuffer);
+pending.push(token);
+
+console.log("QUEUE ADDED:", token);
 
     await gmail.users.messages.modify({
       userId:"me",
@@ -335,29 +343,49 @@ app.get("/createjob", (req, res) => {
 });
 
 // --------------------
-// STAR CLOUDPRNT ENDPOINTS
+// ADVANCED CLOUDPRNT
 // --------------------
+
 app.post("/starcloudprnt", (req, res) => {
+
   console.log("PRINTER POLLED");
 
-  res.setHeader("Content-Type", "application/json");
-  res.send({
-    jobReady: jobs.length > 0,
-    mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: "12345",
+  if(pending.length === 0){
+    return res.json({ jobReady:false });
+  }
+
+  const token = pending[0];
+
+  res.json({
+    jobReady:true,
+    mediaTypes:["application/vnd.star.starprnt"],
+    jobToken:token
   });
+
 });
 
-app.get("/starcloudprnt", (req, res) => {
-  if (jobs.length > 0) {
-    console.log("PRINTER REQUESTED JOB");
 
-    const nextJob = jobs.shift();
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.send(nextJob);
-  } else {
-    res.status(204).send();
+app.get("/starcloudprnt", (req, res) => {
+
+  const token = req.query.jobToken;
+
+  console.log("PRINTER REQUESTED:", token);
+
+  if(token && jobs.has(token)){
+
+    const job = jobs.get(token);
+
+    jobs.delete(token);
+    pending = pending.filter(t => t !== token);
+
+    res.setHeader("Content-Type","application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control","no-store");
+
+    return res.send(job);
   }
+
+  res.status(204).send();
 });
 
 // --------------------
