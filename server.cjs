@@ -194,21 +194,21 @@ function buildReceipt(customer, orderType, phone, totalItems, items) {
   // ORDER TYPE (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + phone + "\n"));
+  buffers.push(Buffer.from(" " + orderType + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
 
   // --------------------
   // Phone
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01])); // bold on
-  buffers.push(Buffer.from(" " + totalItems + "\n")); 
+  buffers.push(Buffer.from(" " + phone + "\n")); 
   buffers.push(Buffer.from([0x1B,0x45,0x00])); // bold off
 
   // --------------------
   // Total Items (BOLD ONLY)
   // --------------------
   buffers.push(Buffer.from([0x1B,0x45,0x01]));
-  buffers.push(Buffer.from(" " + orderType + "\n"));
+  buffers.push(Buffer.from(" " + "Total Items:" + " " + totalItems + "\n"));
   buffers.push(Buffer.from([0x1B,0x45,0x00]));
   
   // --------------------
