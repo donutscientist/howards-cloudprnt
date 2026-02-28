@@ -349,56 +349,54 @@ function parseSquareHTML(html){
   // ---------------------------------------
   // ⭐ ONLY PARSE RECEIPT TABLE
   // ---------------------------------------
-  const items = [];
-  let current = null;
+  // -------------------------
+// ITEMS + MODIFIERS (REAL)
+// -------------------------
+const items = [];
+let totalCount = 0;
 
-  $('table').each((i,table)=>{
+$('tr.item-row').each((i,row)=>{
 
-    const tableText = $(table).text();
+  const name = $(row)
+    .find('.item-name')
+    .first()
+    .text()
+    .trim();
 
-    // skip marketing tables
-    if(!tableText.includes("$")) return;
+  if(!name) return;
 
-    $(table).find('tr').each((j,tr)=>{
+  // ⭐ GET QTY
+  let qty = $(row)
+    .find('.item-quantity')
+    .first()
+    .text()
+    .trim();
 
-      const tds = $(tr).find('td');
+  qty = parseInt(qty) || 1;
 
-      if(tds.length < 2) return;
+  totalCount += qty;
 
-      const name = $(tds[0]).text().trim();
-      const price = $(tds[1]).text().trim();
+  const modifiers = [];
 
-      if(!price.startsWith("$")) return;
-      if(name.toLowerCase().includes("order total")) return;
-      if(name.toLowerCase().includes("tax")) return;
-      if(name.toLowerCase().includes("tip")) return;
-      if(name.toLowerCase().includes("discount")) return;
-      if(name.toLowerCase().includes("subtotal")) return;
-      if(name.toLowerCase().includes("total")) return;
-
-      // modifier line
-      if(name.startsWith("•") && current){
-        current.modifiers.push(name.replace("•","").trim());
-        return;
-      }
-
-      // item line
-      current = {
-        item:`1x ${name}`,
-        modifiers:[]
-      };
-
-      items.push(current);
-
+  $(row)
+    .find('.item-modifier-name .p')
+    .each((j,mod)=>{
+      const txt = $(mod).text().trim();
+      if(txt) modifiers.push(txt);
     });
 
+  items.push({
+    item:`${qty}x ${name}`,
+    modifiers
   });
+
+});
 
   return{
     customer,
     orderType,
     phone,
-    totalItems:items.length.toString(),
+    totalItems:totalCount.toString(),
     estimate,
     note,
     items
