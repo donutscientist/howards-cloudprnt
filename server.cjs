@@ -307,20 +307,28 @@ if (isModifier && current) {
 // NOTE placement: directly under Total Items
 // --------------------
 
-function fit32(text){
+function wrap32(text){
 
-  if(!text) return "";
+  if(!text) return [""];
 
-  text = text.trim();
+  text = text.replace(/\s+/g," ").trim();
 
-  // collapse spaces
-  text = text.replace(/\s+/g," ");
+  const lines = [];
 
-  // HARD LIMIT
-  if(text.length <= 32) return text;
+  while(text.length > 32){
 
-  // cut + add ...
-  return text.substring(0,29) + "...";
+    // find last space before 32
+    let idx = text.lastIndexOf(" ",32);
+
+    if(idx === -1) idx = 32; // force split if no space
+
+    lines.push(text.substring(0,idx));
+    text = text.substring(idx).trim();
+  }
+
+  if(text.length) lines.push(text);
+
+  return lines;
 }
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
@@ -369,11 +377,19 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
-    buffers.push(Buffer.from(fit32(order.item) + "\n"));
+    const itemLines = wrap32(order.item);
+
+itemLines.forEach(l=>{
+  buffers.push(Buffer.from(l + "\n"));
+});
     buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
     buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
     for (const mod of order.modifiers || []) {
-      buffers.push(Buffer.from("    " + fit32(mod) + "\n"));
+      const modLines = wrap32(mod);
+
+modLines.forEach((l,i)=>{
+  buffers.push(Buffer.from("    " + l + "\n"));
+});
     }
   }
 
