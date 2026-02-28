@@ -313,22 +313,45 @@ function parseSquareHTML(html){
 
   const $ = cheerio.load(html);
 
-  let phone = $('a[href^="tel:"]').first().text().trim();
+  // -------------------------
+  // CUSTOMER + PHONE (FIXED)
+  // -------------------------
+  let phone = "";
   let customer = "UNKNOWN";
 
   $('td').each((i,el)=>{
     const txt = $(el).text().trim();
-    if(/\(\d{3}\)\s*\d{3}-\d{4}/.test(txt)){
-      phone = txt;
+
+    const match = txt.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
+    if(match){
+      phone = match[0]; // ONLY phone, stop before email
       customer = $(el).prev().text().trim() || "UNKNOWN";
     }
   });
 
+  // -------------------------
+  // NOTE (FIXED)
+  // -------------------------
+  let note = "";
+
+  $('*:contains("Notes")').each((i,el)=>{
+    const next = $(el).parent().next().text().trim();
+    if(next && next.length < 120){ // avoid footer junk
+      note = next;
+    }
+  });
+
+  // -------------------------
+  // ESTIMATE
+  // -------------------------
   let estimate = "";
   let orderType = "Square Pickup";
 
-  const pickup = $('*:contains("Estimated Pickup Time")').next().text().trim();
-  const delivery = $('*:contains("Estimated Delivery Time")').next().text().trim();
+  const pickup = $('*:contains("Estimated Pickup Time")')
+    .parent().next().text().trim();
+
+  const delivery = $('*:contains("Estimated Delivery Time")')
+    .parent().next().text().trim();
 
   if(pickup){
     estimate = pickup;
@@ -340,57 +363,54 @@ function parseSquareHTML(html){
     orderType = "Square Delivery";
   }
 
-  let note = "";
-  const noteLabel = $('*:contains("Notes")').first();
-  if(noteLabel.length){
-    note = noteLabel.next().text().trim();
-  }
-
-  // ---------------------------------------
-  // ⭐ ONLY PARSE RECEIPT TABLE
-  // ---------------------------------------
   // -------------------------
-// ITEMS + MODIFIERS (REAL)
-// -------------------------
-const items = [];
-let totalCount = 0;
+  // ITEMS + MODIFIERS (FIXED)
+  // -------------------------
+  const items = [];
+  let current = null;
+  let totalCount = 0;
 
-$('tr.item-row').each((i,row)=>{
+  $('tr').each((i,row)=>{
 
-  const name = $(row)
-    .find('.item-name')
-    .first()
-    .text()
-    .trim();
+    // 🟢 ITEM ROW
+    if($(row).hasClass('item-row')){
 
-  if(!name) return;
+      const name = $(row)
+        .find('.item-name')
+        .first()
+        .text()
+        .trim();
 
-  // ⭐ GET QTY
-  let qty = $(row)
-    .find('.item-quantity')
-    .first()
-    .text()
-    .trim();
+      let qty = $(row)
+        .find('.item-quantity')
+        .first()
+        .text()
+        .trim();
 
-  qty = parseInt(qty) || 1;
+      qty = parseInt(qty) || 1;
 
-  totalCount += qty;
+      totalCount += qty;
 
-  const modifiers = [];
+      current = {
+        item:`${qty}x ${name}`,
+        modifiers:[]
+      };
 
-  $(row)
-    .find('.item-modifier-name .p')
-    .each((j,mod)=>{
-      const txt = $(mod).text().trim();
-      if(txt) modifiers.push(txt);
-    });
+      items.push(current);
+    }
 
-  items.push({
-    item:`${qty}x ${name}`,
-    modifiers
+    // 🟣 MODIFIER ROW
+    if($(row).hasClass('modifier-row') && current){
+
+      const mod = $(row)
+        .find('.item-modifier-name p')
+        .text()
+        .trim();
+
+      if(mod) current.modifiers.push(mod);
+    }
+
   });
-
-});
 
   return{
     customer,
