@@ -157,10 +157,38 @@ function parseGrubHub(html) {
 }
 
 
-// --------------------
-// RECEIPT BUILDER
-// NOTE placement: directly under Total Items
-// --------------------
+
+function cleanModifierText(raw) {
+  let s = (raw || "").replace(/\u00A0/g, " ").trim();
+
+  // remove leading icons/bullets/spaces
+  s = s.replace(/^[\s➕▪️]+/g, "");
+
+  // capture qty at end: ×2 or x2
+  let qty = "";
+  const qtyMatch = s.match(/(?:×|x)\s*(\d+)\s*$/i);
+  if (qtyMatch) {
+    qty = qtyMatch[1];
+    s = s.replace(/(?:×|x)\s*\d+\s*$/i, "").trim();
+  }
+
+  // remove any ($price) anywhere
+  s = s.replace(/\(\s*\$[\d.,]+\s*\)/g, "").trim();
+
+  // convert multiplication sign to normal x (just in case)
+  s = s.replace(/×/g, "x");
+
+  // remove control chars that printers show as \c\2 etc
+  s = s.replace(/[\x00-\x1F\x7F]/g, "");
+
+  // normalize spaces
+  s = s.replace(/\s+/g, " ").trim();
+
+  // re-apply qty in a clean way
+  if (qty) s = `${qty}x ${s}`;
+
+  return s;
+}
 
 function parseSquareHTML(html) {
   const $ = cheerio.load(html);
@@ -243,39 +271,11 @@ function parseSquareHTML(html) {
 
   if(!name) return;
 
-  // MODIFIER
-const modCell = $(tr).find('td.item-modifier-name');
-
-if (modCell.length && current) {
-
-  const divs = modCell.find('div.p');
-
-  if (!divs.length) return;
-
-  let name = $(divs[0]).text().trim();
-  let qty  = divs.length > 1 ? $(divs[1]).text().trim() : "";
-
-  // CLEAN NAME
-  name = name
-    .replace(/^[➕▪️]+\s*/g, '') // remove bullets
-    .replace(/\s*\(\$[\d.]+\)\s*/g, '')           // remove ($3.00)
-    .trim();
-
-  // capture qty at end: ×2 or x2
-  let qty = "";
-  const qtyMatch = s.match(/(?:×|x)\s*(\d+)\s*$/i);
-  if (qtyMatch) {
-    qty = qtyMatch[1];
-    s = s.replace(/(?:×|x)\s*\d+\s*$/i, "").trim();
-  }
-
-  // convert multiplication sign to normal x (just in case)
-  s = s.replace(/×/g, "x");
-
-  // re-apply qty in a clean way
-  if (qty) s = `${qty}x ${s}`;
-  }
-
+// MODIFIER
+if (isModifier && current) {
+  const raw = $(tr).find("div.p").first().text();
+  const mod = cleanModifierText(raw);
+  if (mod) current.modifiers.push(mod);
   return;
 }
 
@@ -286,6 +286,12 @@ if (modCell.length && current) {
 
   return { customer, orderType, phone, totalItems, estimate, note, items };
 }
+
+// --------------------
+// RECEIPT BUILDER
+// NOTE placement: directly under Total Items
+// --------------------
+
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
