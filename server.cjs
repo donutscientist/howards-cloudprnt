@@ -6,7 +6,7 @@ const app = express();
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
-// CLOUDPRNT QUEUE
+// ADVANCED CLOUDPRNT QUEUE
 // --------------------
 let activeJobs = new Map(); // token -> Buffer
 let pending = [];           // tokens FIFO
@@ -18,26 +18,36 @@ const auth = new google.auth.OAuth2(
   process.env.CLIENT_ID,
   process.env.CLIENT_SECRET
 );
+
 auth.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
+
 const gmail = google.gmail({ version: "v1", auth });
 
 // --------------------
 // HELPERS: BASE64URL + QUOTED-PRINTABLE
 // --------------------
 function decodeBase64Url(data) {
-  if (!data) return "";
   return Buffer.from(
-    data.replace(/-/g, "+").replace(/_/g, "/").padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
+    data
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
     "base64"
   ).toString("utf8");
 }
 
+// Gmail message parts often contain quoted-printable text (with =20, soft wraps "=\n")
 function decodeQuotedPrintable(input) {
   if (!input) return "";
-  let s = input.replace(/=\r?\n/g, ""); // remove soft breaks
+
+  // Remove soft line breaks
+  let s = input.replace(/=\r?\n/g, "");
+
+  // Convert =XX hex escapes
   s = s.replace(/=([A-Fa-f0-9]{2})/g, (_, hex) =>
     String.fromCharCode(parseInt(hex, 16))
   );
+
   return s;
 }
 
@@ -65,16 +75,18 @@ function getPartText(payload, mimeType) {
   return decodeBase64Url(part.body.data);
 }
 
+// Backward-compatible: keep your old behavior for GH (HTML)
 function getHtmlBody(payload) {
   return getPartText(payload, "text/html");
 }
 
+// For Square, use text/plain (quoted printable)
 function getPlainBody(payload) {
   return getPartText(payload, "text/plain");
 }
 
 // --------------------
-// GRUBHUB PARSER (UNCHANGED)
+// GRUBHUB PARSER (unchanged from your working one)
 // --------------------
 function parseGrubHub(html) {
   const $ = cheerio.load(html);
@@ -113,152 +125,152 @@ function parseGrubHub(html) {
 
   const items = [];
 
-  $('tr').each((i,tr)=>{
+  $("tr").each((i, tr) => {
+    const tds = $(tr).find("td");
+    if (tds.length < 3) return;
 
-  const tds = $(tr).find('td');
-  if(tds.length < 2) return;
+    const qtyTxt = $(tds[0]).text().replace(/\s+/g, " ").trim();
+    const xTxt = $(tds[1]).text().replace(/\s+/g, " ").trim();
+    const name = $(tds[2]).text().replace(/\s+/g, " ").trim();
 
-  const name = $(tds[0]).text().trim();
-  const price = $(tds[1]).text().trim();
+    if (!/^\d+$/.test(qtyTxt)) return;
+    if (xTxt.toLowerCase() !== "x") return;
+    if (!name) return;
 
-  if(!name || !price.startsWith("$")) return;
+    const currentItem = { item: `${qtyTxt}x ${name}`, modifiers: [] };
 
-  const lower = name.toLowerCase();
+    const next = $(tr).next("tr");
+    next.find("li").each((j, li) => {
+      let mod = $(li).text().replace(/\s+/g, " ").trim();
+      mod = mod.replace(/^▪️/, "").replace(/^▪/, "").trim();
+      if (mod) currentItem.modifiers.push(mod);
+    });
 
-  // 🚫 REMOVE NON-ITEM ROWS
-  if(
-    lower.includes("reg price") ||
-    lower.includes("discount") ||
-    lower.includes("savings") ||
-    lower.includes("subtotal") ||
-    lower.includes("tax") ||
-    lower.includes("tip") ||
-    lower.includes("total") ||
-    lower.includes("order") ||
-    lower.includes("payment") ||
-    lower.includes("cash") ||
-    lower.includes("visa") ||
-    lower.includes("mastercard") ||
-    lower.includes("shop online") ||
-    lower.includes("run your own business") ||
-    lower.includes("square") ||
-    lower.includes("privacy") ||
-    lower.includes("receipt") ||
-    lower.includes("preference") ||
-    lower.includes("get started")
-  ) return;
+    const counter = {};
+    for (const m of currentItem.modifiers) counter[m] = (counter[m] || 0) + 1;
+    currentItem.modifiers = Object.entries(counter).map(([n, q]) => (q === 1 ? n : `${q}x ${n}`));
 
-  items.push({
-    item:`1x ${name}`,
-    modifiers:[]
+    items.push(currentItem);
   });
 
-});
+  return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
+}
 
-const unique = [];
-const seen = new Set();
+// --------------------
+// SQUARE PARSER (USES text/plain from the email)
+// --------------------
+function parseSquare(body) {
+  // 1) Normalize + decode artifacts already handled outside (you pass decodeQuotedPrintable)
+  body = (body || "")
+    .replace(/\r/g, "\n")
+    .replace(/\u00A0/g, " ");
 
-for(const it of items){
-  if(!seen.has(it.item)){
-    seen.add(it.item);
-    unique.push(it);
+  // 2) Cut off noisy footer / link sections (prevents grabbing URLs as items)
+  const cutMarkers = [
+    "Reply to this email",
+    "View your full receipt",
+    "Order status",
+    "squareup.com",
+    "a.squareupmessaging.com",
+  ];
+  for (const m of cutMarkers) {
+    const idx = body.indexOf(m);
+    if (idx !== -1) {
+      body = body.slice(0, idx);
+      break;
+    }
   }
-}
 
-  return { customer, orderType, phone, totalItems:unique.length.toString(),
-items:unique, items, estimate: "", note: "" };
-}
-
-// --------------------
-// SQUARE PARSER (TEXT/PLAIN ONLY)
-// --------------------
-function parseSquare(plainBody) {
-  let body = (plainBody || "").replace(/\r/g, "\n").replace(/\u00A0/g, " ");
-
-  // ✅ ONLY cut at true footer markers (DON'T cut at "squareup.com")
-  const footerRe = /(Reply to this email|View your full receipt)/i;
-  const m = body.match(footerRe);
-  if (m && m.index !== undefined) body = body.slice(0, m.index);
-
+  // 3) Build cleaned lines
   const lines = body
     .split("\n")
     .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  // Estimate + type
+  // --------------------
+  // ESTIMATE + ORDER TYPE
+  // --------------------
   let estimate = "";
   let orderType = "Square Pickup";
+
   for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].toLowerCase();
-    if (t === "estimated pickup time") {
+    if (lines[i].toLowerCase() === "estimated pickup time") {
       estimate = lines[i + 1] || "";
       orderType = "Square Pickup";
     }
-    if (t === "estimated delivery time") {
+    if (lines[i].toLowerCase() === "estimated delivery time") {
       estimate = lines[i + 1] || "";
       orderType = "Square Delivery";
     }
   }
 
-  // Notes
+  // --------------------
+  // NOTE (ONLY IF EXISTS)
+  // --------------------
   let note = "";
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].toLowerCase();
     if (t === "notes" || t === "notes:") {
+      // take the next non-empty line as the note
       note = (lines[i + 1] || "").trim();
       break;
     }
   }
 
-  // Customer + phone: use LAST phone = customer phone (store phone appears earlier)
-  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
-  const phones = lines.flatMap((l) => (l.match(phoneRegex) ? [l.match(phoneRegex)[0]] : []));
-  const phone = phones.length ? phones[phones.length - 1] : "";
-
+  // --------------------
+  // CUSTOMER + PHONE (BOTTOM BLOCK)
+  // --------------------
+  let phone = "";
   let customer = "UNKNOWN";
-  if (phone) {
-    // find the line that contains the last phone, then walk upward for a clean name
-    let idx = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (phoneRegex.test(lines[i])) { idx = i; break; }
-    }
-    for (let j = idx - 1; j >= 0; j--) {
-      const cand = lines[j];
-      if (!cand) continue;
-      if (cand.includes("@")) continue;
-      if (/howard/i.test(cand)) continue;
-      if (/order|pickup|delivery|estimated|notes/i.test(cand.toLowerCase())) continue;
-      customer = cand;
+  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (phoneRegex.test(lines[i])) {
+      phone = lines[i].match(phoneRegex)[0];
+      customer = lines[i - 1] || "UNKNOWN";
       break;
     }
   }
 
-  // Items: Square pattern is Name then a $ line soon after (often "$0.00"), then "Reg Price"
+  // --------------------
+  // ITEMS + MODIFIERS (from "Order summary")
+  // --------------------
   const items = [];
   let current = null;
 
-  const isJunk = (l) => {
+  const start = lines.findIndex((l) => l.toLowerCase().includes("order summary"));
+  const stop = lines.findIndex((l) => l.toLowerCase() === "notes" || l.toLowerCase() === "notes:");
+
+  const end = stop !== -1 ? stop : lines.length;
+
+  const isJunkLine = (l) => {
     const s = l.toLowerCase();
     return (
       s.startsWith("$") ||
-      s === "reg price" ||
-      s.includes("discount") ||
-      s.includes("savings") ||
+      s.includes("estimated ") ||
+      s.includes("pickup") ||
+      s.includes("delivery") ||
+      s.includes("order total") ||
+      s === "total" ||
       s.includes("subtotal") ||
       s.includes("tax") ||
       s.includes("tip") ||
-      s.includes("total") ||
+      s.includes("discount") ||
+      s.includes("savings") ||
+      s.includes("reg price") ||
+      s.includes("quantity") ||
       s.includes("order summary") ||
-      s.includes("estimated") ||
-      s.includes("notes") ||
+      s.includes("customer") ||
+      s.includes("phone") ||
       s.includes("reply") ||
       s.includes("view") ||
       s.includes("http") ||
+      s.includes("squareup") ||
       phoneRegex.test(l)
     );
   };
 
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = start + 1; i < end; i++) {
     const l = lines[i];
 
     // modifiers
@@ -268,13 +280,15 @@ function parseSquare(plainBody) {
       continue;
     }
 
-    // item name
-    if (!isJunk(l)) {
-      const lookahead = lines.slice(i + 1, i + 6).join(" ");
-      const hasPriceSoon = /\$\d/.test(lookahead); // catches $0.00 too
+    // item name detection:
+    // Square receipt pattern: item name line, then next lines include a $ price (often "$0.00" then "Reg Price")
+    if (!isJunkLine(l) && l.length > 1) {
+      const lookahead = lines.slice(i + 1, i + 8).join(" ");
+      const hasPriceSoon = /\$\d/.test(lookahead);
       if (hasPriceSoon) {
         current = { item: `1x ${l}`, modifiers: [] };
         items.push(current);
+        continue;
       }
     }
   }
@@ -286,54 +300,148 @@ function parseSquare(plainBody) {
     totalItems: String(items.length),
     estimate,
     note,
-    items
+    items,
   };
 }
 
 // --------------------
 // RECEIPT BUILDER
+// NOTE placement: directly under Total Items
 // --------------------
+
+function parseSquareHTML(html){
+
+  const $ = cheerio.load(html);
+
+  // -------------------------
+  // CUSTOMER + PHONE
+  // -------------------------
+  let phone = $('a[href^="tel:"]').first().text().trim();
+
+  let customer = "UNKNOWN";
+
+  $('td').each((i,el)=>{
+    const txt = $(el).text().trim();
+    if(/\(\d{3}\)\s*\d{3}-\d{4}/.test(txt)){
+      phone = txt;
+      customer = $(el).prev().text().trim() || "UNKNOWN";
+    }
+  });
+
+  // -------------------------
+  // ESTIMATED TIME
+  // -------------------------
+  let estimate = "";
+  let orderType = "Square Pickup";
+
+  const pickup = $('*:contains("Estimated Pickup Time")').next().text().trim();
+  const delivery = $('*:contains("Estimated Delivery Time")').next().text().trim();
+
+  if(pickup){
+    estimate = pickup;
+    orderType = "Square Pickup";
+  }
+
+  if(delivery){
+    estimate = delivery;
+    orderType = "Square Delivery";
+  }
+
+  // -------------------------
+  // NOTE
+  // -------------------------
+  let note = "";
+  const noteLabel = $('*:contains("Notes")').first();
+  if(noteLabel.length){
+    note = noteLabel.next().text().trim();
+  }
+
+  // -------------------------
+  // ITEMS
+  // -------------------------
+  const items = [];
+
+  $('tr').each((i,tr)=>{
+
+    const tds = $(tr).find('td');
+
+    if(tds.length < 2) return;
+
+    const name = $(tds[0]).text().trim();
+    const price = $(tds[1]).text().trim();
+
+    if(!name || !price.startsWith("$")) return;
+    if(name.toLowerCase().includes("order total")) return;
+    if(name.toLowerCase().includes("tax")) return;
+    if(name.toLowerCase().includes("tip")) return;
+    if(name.toLowerCase().includes("discount")) return;
+
+    items.push({
+      item:`1x ${name}`,
+      modifiers:[]
+    });
+
+  });
+
+  return{
+    customer,
+    orderType,
+    phone,
+    totalItems:items.length.toString(),
+    estimate,
+    note,
+    items
+  };
+}
+
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
-  buffers.push(Buffer.from([0x1B, 0x40])); // init
+  buffers.push(Buffer.from([0x1B, 0x40])); // ESC @
 
+  // Customer
   buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" " + customer + "\n"));
   buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
+  // Order type
   buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" " + orderType + "\n"));
   buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
+  // Phone
   if (phone) {
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" " + phone + "\n"));
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
+  // Total Items
   buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
   buffers.push(Buffer.from(" Total Items: " + totalItems + "\n"));
   buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
 
+  // NOTE under Total Items (ONLY if exists)
   if (note) {
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" NOTE: " + note + "\n"));
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
+  // Estimate time on its own line
   if (estimate) {
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" " + estimate + "\n"));
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
+  // Items
   for (const order of items) {
     buffers.push(Buffer.from("\n"));
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
-    buffers.push(Buffer.from([0x1B, 0x2D, 0x01]));
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
     buffers.push(Buffer.from(order.item + "\n"));
-    buffers.push(Buffer.from([0x1B, 0x2D, 0x00]));
+    buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
     buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
     for (const mod of order.modifiers || []) {
       buffers.push(Buffer.from("    " + mod + "\n"));
@@ -341,14 +449,48 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   }
 
   buffers.push(Buffer.from("\n"));
-  buffers.push(Buffer.from([0x1B, 0x64, 0x03]));
-  buffers.push(Buffer.from([0x1D, 0x56, 0x00]));
+  buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
+  buffers.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
 
   return Buffer.concat(buffers);
 }
+function getSquarePlain(payload){
 
+  function walk(part){
+
+    if(!part) return "";
+
+    if(part.mimeType === "text/plain" && part.body?.data){
+
+      let raw = Buffer
+        .from(part.body.data,"base64")
+        .toString("utf8");
+
+      // REMOVE SOFT WRAPS
+      raw = raw.replace(/=\r?\n/g,"");
+
+      // DECODE =20 etc
+      raw = raw.replace(/=([A-Fa-f0-9]{2})/g,
+        (_,hex)=>String.fromCharCode(parseInt(hex,16))
+      );
+
+      return raw;
+    }
+
+    if(part.parts){
+      for(const p of part.parts){
+        const r = walk(p);
+        if(r) return r;
+      }
+    }
+
+    return "";
+  }
+
+  return walk(payload);
+}
 // --------------------
-// CHECK EMAIL
+// CHECK EMAIL (GH + SQ)
 // --------------------
 async function checkEmail() {
   try {
@@ -397,23 +539,25 @@ async function checkEmail() {
     }
 
     if (platform === "SQ") {
-      // ✅ Square: parse text/plain (this is where your real order is)
-      const plainRaw = getPlainBody(msg.data.payload);
-      const plain = decodeQuotedPrintable(plainRaw);
 
-      parsed = parseSquare(plain);
+  const plainRaw = getPlainBody(msg.data.payload);
 
-      // quick debug (remove later)
-      console.log("SQ PARSED:", {
-        customer: parsed.customer,
-        phone: parsed.phone,
-        totalItems: parsed.totalItems
-      });
-    }
+  const plain = decodeQuotedPrintable(plainRaw);
+
+  parsed = parseSquare(plain);
+
+  console.log(
+    "SQ PARSED:",
+    parsed.customer,
+    parsed.phone,
+    parsed.totalItems,
+    parsed.items.map(i=>i.item)
+  );
+}
 
     if (!parsed) return;
 
-    const id = Date.now().toString();
+    const id = Math.random().toString(36).substring(2,10);
     const jobBuf = buildReceipt(
       parsed.customer,
       parsed.orderType,
@@ -442,19 +586,21 @@ async function checkEmail() {
 }
 
 // --------------------
-// CLOUDPRNT ENDPOINTS
+// ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 app.post("/starcloudprnt", (req, res) => {
   console.log("PRINTER POLLED");
 
   if (pending.length > 0) {
-    const next = pending[0];
-    return res.json({
-      jobReady: true,
-      mediaTypes: ["application/vnd.star.starprnt"],
-      jobToken: next
-    });
-  }
+  const next = pending[0];
+
+  return res.json({
+    jobReady: true,
+    mediaTypes: ["application/vnd.star.starprnt"],
+    jobToken: next,
+    contentType: "application/vnd.star.starprnt"
+  });
+}
 
   res.json({ jobReady: false });
 });
@@ -465,7 +611,9 @@ app.get("/starcloudprnt", (req, res) => {
   console.log("PRINTER REQUESTED:", token);
   console.log("PENDING:", pending);
 
-  if (!token || !activeJobs.has(token)) return res.status(204).send();
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
+  }
 
   const job = activeJobs.get(token);
 
