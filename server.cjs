@@ -586,13 +586,15 @@ app.post("/starcloudprnt", (req, res) => {
   console.log("PRINTER POLLED");
 
   if (pending.length > 0) {
-    const next = pending[0];
-    return res.json({
-      jobReady: true,
-      mediaTypes: ["application/vnd.star.starprnt"],
-      jobToken: next
-    });
-  }
+  const next = pending[0];
+
+  return res.json({
+    jobReady: true,
+    mediaTypes: ["application/vnd.star.starprnt"],
+    jobToken: next,
+    contentType: "application/vnd.star.starprnt"
+  });
+}
 
   res.json({ jobReady: false });
 });
