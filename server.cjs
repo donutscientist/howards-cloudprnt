@@ -261,12 +261,19 @@ if (modCell.length && current) {
     .replace(/\s*\(\$[\d.]+\)\s*/g, '')           // remove ($3.00)
     .trim();
 
-  // EXTRACT QTY (x2)
-  const m = qty.match(/x(\d+)/i);
-  const count = m ? m[1] : "1";
+  // capture qty at end: ×2 or x2
+  let qty = "";
+  const qtyMatch = s.match(/(?:×|x)\s*(\d+)\s*$/i);
+  if (qtyMatch) {
+    qty = qtyMatch[1];
+    s = s.replace(/(?:×|x)\s*\d+\s*$/i, "").trim();
+  }
 
-  if (name) {
-    current.modifiers.push(count === "1" ? name : `${count}x ${name}`);
+  // convert multiplication sign to normal x (just in case)
+  s = s.replace(/×/g, "x");
+
+  // re-apply qty in a clean way
+  if (qty) s = `${qty}x ${s}`;
   }
 
   return;
