@@ -387,35 +387,60 @@ let items=[];
 let estimate="";
 let note="";
 
-    if (platform === "GH") {
-      body = body
-        .replace(/\u00A0/g," ")
-        .replace(/\t/g," ")
-        .replace(/\r/g,"")
-        .replace(/[ ]+/g," ");
+    if(platform === "GH"){
 
-      const ghParsed = parseGrubHub(body);
-customer = ghParsed.customer;
-orderType = ghParsed.orderType;
-phone = ghParsed.phone;
-totalItems = ghParsed.totalItems;
-items = ghParsed.items;
+  body = body
+    .replace(/\u00A0/g," ")
+    .replace(/\t/g," ")
+    .replace(/\r/g,"")
+    .replace(/[ ]+/g," ");
 
-    const id = Date.now().toString();
+  const ghParsed = parseGrubHub(body);
 
-activeJobs.set(id, buildReceipt(customer, orderType, phone, totalItems, items, estimate, note));
+  customer = ghParsed.customer;
+  orderType = ghParsed.orderType;
+  phone = ghParsed.phone;
+  totalItems = ghParsed.totalItems;
+  items = ghParsed.items;
+}
+
+if(platform === "SQ"){
+
+  const sqParsed = parseSquare(body);
+
+  customer = sqParsed.customer;
+  orderType = sqParsed.orderType;
+  phone = sqParsed.phone;
+  totalItems = sqParsed.totalItems;
+  items = sqParsed.items;
+  estimate = sqParsed.estimate;
+  note = sqParsed.note;
+}
+
+// ⭐ THIS MUST BE OUTSIDE BOTH
+const id = Date.now().toString();
+
+activeJobs.set(id, buildReceipt(
+  customer,
+  orderType,
+  phone,
+  totalItems,
+  items,
+  estimate,
+  note
+));
+
 pending.push(id);
-
 
 console.log("QUEUE ADDED:", id);
 
-    await gmail.users.messages.modify({
-      userId:"me",
-      id:messageId,
-      requestBody:{ removeLabelIds:["UNREAD"] }
-    });
+await gmail.users.messages.modify({
+  userId:"me",
+  id:messageId,
+  requestBody:{ removeLabelIds:["UNREAD"] }
+});
 
-    console.log("PRINT JOB ADDED");}
+console.log("PRINT JOB ADDED");}
 
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
