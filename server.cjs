@@ -307,6 +307,21 @@ if (isModifier && current) {
 // NOTE placement: directly under Total Items
 // --------------------
 
+function fit32(text){
+
+  if(!text) return "";
+
+  text = text.trim();
+
+  // collapse spaces
+  text = text.replace(/\s+/g," ");
+
+  // HARD LIMIT
+  if(text.length <= 32) return text;
+
+  // cut + add ...
+  return text.substring(0,29) + "...";
+}
 
 function buildReceipt(customer, orderType, phone, totalItems, items, estimate = "", note = "") {
   const buffers = [];
@@ -354,11 +369,11 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x01]));
     buffers.push(Buffer.from(" "));
     buffers.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline on
-    buffers.push(Buffer.from(order.item + "\n"));
+    buffers.push(Buffer.from(fit32(order.item) + "\n"));
     buffers.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
     buffers.push(Buffer.from([0x1B, 0x21, 0x00]));
     for (const mod of order.modifiers || []) {
-      buffers.push(Buffer.from("    " + mod + "\n"));
+      buffers.push(Buffer.from("    " + fit32(mod) + "\n"));
     }
   }
 
