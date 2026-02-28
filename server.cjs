@@ -64,12 +64,32 @@ function getBody(payload){
   return walk(payload);
 }
 
-function parseSquare(body){
+function parseSquare(html){
 
-  body = body
+  const $ = cheerio.load(html);
+
+  const text = $("body").text()
     .replace(/\r/g,"")
     .replace(/\u00A0/g," ")
     .replace(/[ ]+/g," ");
+
+  // ⭐ START from CUSTOMER section
+  // Square always shows phone after name
+  const start = text.search(/\(\d{3}\)\s*\d{3}-\d{4}/);
+
+  if(start === -1){
+    return {
+      customer:"UNKNOWN",
+      orderType:"Square Pickup",
+      phone:"",
+      totalItems:"0",
+      estimate:"",
+      note:"",
+      items:[]
+    };
+  }
+
+  const body = text.slice(start - 40); // grab name above phone
 
   // --------------------
   // CUSTOMER
@@ -89,8 +109,8 @@ function parseSquare(body){
   let estimate = "";
   let orderType = "Square Pickup";
 
-  const pickup = body.match(/Pickup\s+time\s*:\s*(.+)/i);
-  const delivery = body.match(/Delivery\s+time\s*:\s*(.+)/i);
+  const pickup = body.match(/Pickup\s*time\s*:\s*(.+)/i);
+  const delivery = body.match(/Delivery\s*time\s*:\s*(.+)/i);
 
   if(pickup){
     estimate = pickup[1].trim();
@@ -116,7 +136,6 @@ function parseSquare(body){
   // ITEMS
   // --------------------
   const items = [];
-
   const lines = body.split("\n");
 
   let currentItem = null;
@@ -124,34 +143,24 @@ function parseSquare(body){
   for(let i=0;i<lines.length;i++){
 
     let line = lines[i].trim();
-
     if(!line) continue;
 
-    // ITEM BLOCK:
-    // 1
-    // x
-    // Dozen Box
     if(/^\d+$/.test(line) && lines[i+1]?.trim().toLowerCase() === "x"){
 
       let qty = line;
       let name = (lines[i+2] || "").trim();
 
       if(name){
-
         currentItem = {
           item:`${qty}x ${name}`,
           modifiers:[]
         };
-
         items.push(currentItem);
       }
-
       continue;
     }
 
-    // MODIFIER
     if(line.startsWith("▪") && currentItem){
-
       let mod = line.replace(/^▪️?/,'').trim();
       if(mod) currentItem.modifiers.push(mod);
     }
