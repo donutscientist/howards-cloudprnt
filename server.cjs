@@ -360,11 +360,10 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     buffers.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  for (const order of items) {
-
-  buffers.push(Buffer.from("\n"));
-
-  for (const order of items) {
+  // --------------------
+// ITEMS + MODIFIERS
+// --------------------
+for (const order of items) {
 
   buffers.push(Buffer.from("\n"));
 
@@ -388,6 +387,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
 
   }
 }
+  
 
   buffers.push(Buffer.from("\n"));
   buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
