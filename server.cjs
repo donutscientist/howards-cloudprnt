@@ -510,21 +510,53 @@ async function checkEmail() {
 // --------------------
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
-app.post("/starcloudprnt", (req, res) => {
-  console.log("PRINTER POLLED");
+function getBusinessInterval() {
 
-  if (pending.length > 0) {
-  const next = pending[0];
-
-  return res.json({
-    jobReady: true,
-    mediaTypes: ["application/vnd.star.starprnt"],
-    jobToken: next,
-    contentType: "application/vnd.star.starprnt"
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
   });
+
+  const [h, m] = now.split(':').map(Number);
+  const time = h * 60 + m;
+
+  const wakeStart = 4 * 60 + 30;   // 4:30 AM
+  const openStart = 5 * 60;        // 5:00 AM
+  const closeTime = 17 * 60;       // 5:00 PM
+
+  if ((time >= wakeStart && time < openStart) || 
+      (time >= openStart && time <= closeTime)) {
+    return 5;
+  }
+
+  return 18000; // 5 hours
 }
 
-  res.json({ jobReady: false });
+app.post("/starcloudprnt", (req, res) => {
+
+  const pollInterval = getBusinessInterval();
+
+  console.log("POLL INTERVAL:", pollInterval);
+
+  if (pending.length > 0) {
+    const next = pending[0];
+
+    return res.json({
+      jobReady: true,
+      mediaTypes: ["application/vnd.star.starprnt"],
+      jobToken: next,
+      contentType: "application/vnd.star.starprnt",
+      nextPollInterval: pollInterval
+    });
+  }
+
+  res.json({
+    jobReady: false,
+    nextPollInterval: pollInterval
+  });
+
 });
 
 app.get("/starcloudprnt", (req, res) => {
@@ -553,8 +585,18 @@ app.get("/starcloudprnt", (req, res) => {
 // --------------------
 // LOOP
 // --------------------
-setInterval(checkEmail, 5000);
+function scheduleEmailCheck() {
 
+  const interval = getBusinessInterval() * 1000;
+
+  console.log("EMAIL INTERVAL:", interval);
+
+  setTimeout(async () => {
+    await checkEmail();
+    scheduleEmailCheck();
+  }, interval);
+}
+scheduleEmailCheck();
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });
