@@ -540,6 +540,12 @@ app.post("/starcloudprnt", (req, res) => {
 
   console.log("POLL INTERVAL:", pollInterval);
 
+  // NIGHT MODE: tell printer to back off completely
+  if (pollInterval === 18000) {
+  console.log("NIGHT MODE - REJECT POLL");
+  return res.status(204).send();
+  }
+  
   if (pending.length > 0) {
     const next = pending[0];
 
