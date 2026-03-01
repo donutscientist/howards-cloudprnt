@@ -381,12 +381,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   return Buffer.concat(b);
 }
 
-  buffers.push(Buffer.from("\n"));
-  buffers.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
-  buffers.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
-
-  return Buffer.concat(buffers);
-}
+  
 function getSquarePlain(payload){
 
   function walk(part){
