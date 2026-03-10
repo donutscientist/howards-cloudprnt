@@ -65,42 +65,60 @@ function getPlainBody(payload) {
 }
 
 ////////////////////////////////////////////////////
-// DOORDASH PDF EXTRACTOR (NEW)
+// DOORDASH PDF EXTRACTOR
 ////////////////////////////////////////////////////
 async function getDoorDashPDF(message) {
 
   function findPDF(part) {
+
     if (!part) return null;
 
     if (part.filename && part.filename.toLowerCase().endsWith(".pdf")) {
-      return part.body.attachmentId;
+      return part.body?.attachmentId || null;
     }
 
     if (part.parts) {
       for (const p of part.parts) {
-        const r = findPDF(p);
-        if (r) return r;
+        const result = findPDF(p);
+        if (result) return result;
       }
     }
 
     return null;
   }
 
-  const attachmentId = findPDF(message.payload);
+  try {
 
-  if (!attachmentId) return "";
+    const attachmentId = findPDF(message.payload);
 
-  const attachment = await gmail.users.messages.attachments.get({
-    userId: "me",
-    messageId: message.id,
-    id: attachmentId
-  });
+    if (!attachmentId) {
+      console.log("DOORDASH: NO PDF FOUND");
+      return "";
+    }
 
-  const pdfBuffer = Buffer.from(attachment.data.data, "base64");
+    const attachment = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId: message.id,
+      id: attachmentId
+    });
 
-  const data = await pdfParse(pdfBuffer);
+    if (!attachment?.data?.data) {
+      console.log("DOORDASH: EMPTY ATTACHMENT");
+      return "";
+    }
 
-  return data.text;
+    const pdfBuffer = Buffer.from(attachment.data.data, "base64");
+
+    const parsed = await pdfParse(pdfBuffer);
+
+    return parsed.text || "";
+
+  } catch (err) {
+
+    console.log("DOORDASH PDF ERROR:", err.message);
+
+    return "";
+  }
 }
 
 ////////////////////////////////////////////////////
@@ -224,10 +242,12 @@ async function checkEmail() {
     ////////////////////////////////////////////////////
     if(platform==="DD"){
 
-      const pdfText = await getDoorDashPDF(msg)
+  const pdfText = await getDoorDashPDF(msg.data)
 
-      parsed = parseDoorDash(pdfText)
-    }
+  if(pdfText){
+    parsed = parseDoorDash(pdfText)
+  }
+}
 
     if(!parsed) return
 
