@@ -224,7 +224,7 @@ async function checkEmail() {
     ////////////////////////////////////////////////////
     if(platform==="DD"){
 
-      const pdfText = await getDoorDashPDF(msg.data)
+      const pdfText = await getDoorDashPDF(msg)
 
       parsed = parseDoorDash(pdfText)
     }
