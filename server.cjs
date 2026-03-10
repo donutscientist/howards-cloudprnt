@@ -67,7 +67,7 @@ function getPlainBody(payload) {
 ////////////////////////////////////////////////////
 // DOORDASH PDF EXTRACTOR (NEW)
 ////////////////////////////////////////////////////
-async function getDoorDashPDF(msg) {
+async function getDoorDashPDF(message) {
 
   function findPDF(part) {
     if (!part) return null;
@@ -86,13 +86,13 @@ async function getDoorDashPDF(msg) {
     return null;
   }
 
-  const attachmentId = findPDF(msg.payload);
+  const attachmentId = findPDF(message.payload);
 
   if (!attachmentId) return "";
 
   const attachment = await gmail.users.messages.attachments.get({
     userId: "me",
-    messageId: msg.id,
+    messageId: message.id,
     id: attachmentId
   });
 
