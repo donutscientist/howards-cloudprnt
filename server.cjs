@@ -68,11 +68,15 @@ function getPlainBody(payload) {
 // DOORDASH PDF EXTRACTOR
 ////////////////////////////////////////////////////
 async function getDoorDashPDF(message) {
-
   function findPDF(part) {
     if (!part) return null;
 
-    if (part.filename && part.filename.toLowerCase().endsWith(".pdf")) {
+    if (
+      part.filename &&
+      part.filename.toLowerCase().endsWith(".pdf") &&
+      part.body &&
+      part.body.attachmentId
+    ) {
       return part.body.attachmentId;
     }
 
@@ -87,10 +91,12 @@ async function getDoorDashPDF(message) {
   }
 
   try {
-
     const attachmentId = findPDF(message.data.payload);
 
-    if (!attachmentId) return "";
+    if (!attachmentId) {
+      console.log("DOORDASH: NO PDF ATTACHMENT FOUND");
+      return "";
+    }
 
     const attachment = await gmail.users.messages.attachments.get({
       userId: "me",
@@ -98,12 +104,14 @@ async function getDoorDashPDF(message) {
       id: attachmentId
     });
 
-    const pdfBuffer = Buffer.from(attachment.data.data, "base64");
+    const pdfBuffer = Buffer.from(
+      attachment.data.data.replace(/-/g, "+").replace(/_/g, "/"),
+      "base64"
+    );
 
     const data = await pdfParse(pdfBuffer);
 
     return data.text || "";
-
   } catch (err) {
     console.log("DOORDASH PDF ERROR:", err.message);
     return "";
@@ -229,12 +237,13 @@ async function checkEmail() {
     ////////////////////////////////////////////////////
     // DOORDASH PDF PARSE
     ////////////////////////////////////////////////////
-    if(platform==="DD"){
+    if (platform === "DD") {
+  const pdfText = await getDoorDashPDF(msg);
 
-  const pdfText = await getDoorDashPDF(msg.data)
-
-  if(pdfText){
-    parsed = parseDoorDash(pdfText)
+  if (pdfText) {
+    parsed = parseDoorDash(pdfText);
+  } else {
+    console.log("DOORDASH: PDF TEXT EMPTY");
   }
 }
 
@@ -269,3 +278,26 @@ async function checkEmail() {
     console.log("CHECK EMAIL ERROR:",e.message)
   }
 }
+
+////////////////////////////////////////////////////
+// EMAIL POLLING
+////////////////////////////////////////////////////
+setInterval(checkEmail, 5000);
+
+console.log("EMAIL INTERVAL:", 5000);
+
+////////////////////////////////////////////////////
+// BASIC HEALTH ROUTE
+////////////////////////////////////////////////////
+app.get("/", (req, res) => {
+  res.send("Howard's CloudPRNT server running");
+});
+
+////////////////////////////////////////////////////
+// START SERVER
+////////////////////////////////////////////////////
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
