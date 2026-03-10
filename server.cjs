@@ -86,21 +86,28 @@ async function getDoorDashPDF(message) {
     return null;
   }
 
-  const attachmentId = findPDF(message.data.payload);
+  try {
 
-  if (!attachmentId) return "";
+    const attachmentId = findPDF(message.data.payload);
 
-  const attachment = await gmail.users.messages.attachments.get({
-    userId: "me",
-    messageId: message.data.id,
-    id: attachmentId
-  });
+    if (!attachmentId) return "";
 
-  const pdfBuffer = Buffer.from(attachment.data.data, "base64");
+    const attachment = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId: message.data.id,
+      id: attachmentId
+    });
 
-  const data = await pdfParse(pdfBuffer);
+    const pdfBuffer = Buffer.from(attachment.data.data, "base64");
 
-  return data.text;
+    const data = await pdfParse(pdfBuffer);
+
+    return data.text || "";
+
+  } catch (err) {
+    console.log("DOORDASH PDF ERROR:", err.message);
+    return "";
+  }
 }
 
 ////////////////////////////////////////////////////
