@@ -70,55 +70,37 @@ function getPlainBody(payload) {
 async function getDoorDashPDF(message) {
 
   function findPDF(part) {
-
     if (!part) return null;
 
     if (part.filename && part.filename.toLowerCase().endsWith(".pdf")) {
-      return part.body?.attachmentId || null;
+      return part.body.attachmentId;
     }
 
     if (part.parts) {
       for (const p of part.parts) {
-        const result = findPDF(p);
-        if (result) return result;
+        const r = findPDF(p);
+        if (r) return r;
       }
     }
 
     return null;
   }
 
-  try {
+  const attachmentId = findPDF(message.data.payload);
 
-    const attachmentId = findPDF(message.payload);
+  if (!attachmentId) return "";
 
-    if (!attachmentId) {
-      console.log("DOORDASH: NO PDF FOUND");
-      return "";
-    }
+  const attachment = await gmail.users.messages.attachments.get({
+    userId: "me",
+    messageId: message.data.id,
+    id: attachmentId
+  });
 
-    const attachment = await gmail.users.messages.attachments.get({
-      userId: "me",
-      messageId: message.id,
-      id: attachmentId
-    });
+  const pdfBuffer = Buffer.from(attachment.data.data, "base64");
 
-    if (!attachment?.data?.data) {
-      console.log("DOORDASH: EMPTY ATTACHMENT");
-      return "";
-    }
+  const data = await pdfParse(pdfBuffer);
 
-    const pdfBuffer = Buffer.from(attachment.data.data, "base64");
-
-    const parsed = await pdfParse(pdfBuffer);
-
-    return parsed.text || "";
-
-  } catch (err) {
-
-    console.log("DOORDASH PDF ERROR:", err.message);
-
-    return "";
-  }
+  return data.text;
 }
 
 ////////////////////////////////////////////////////
