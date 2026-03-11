@@ -2,7 +2,6 @@ const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
-const pdfjs = require("pdfjs-dist");
 
 const app = express();
 app.use(express.raw({ type: "*/*" }));
@@ -120,35 +119,17 @@ async function parseDoorDashPDF(msg) {
       id: attachmentId
     });
 
-    const pdfBuffer = new Uint8Array(
-  Buffer.from(
-    attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
-    "base64"
-  )
+    const pdfBuffer = Buffer.from(
+  attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
+  "base64"
 );
 
-    const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
-const pdf = await loadingTask.promise;
+    const data = await pdfParse(pdfBuffer);
 
-let lines = [];
+    const text = data.text || "";
 
-for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-  const page = await pdf.getPage(pageNum);
-  const content = await page.getTextContent();
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
-  for (const item of content.items) {
-
-    const text = item.str.trim();
-    if (!text) continue;
-
-    const font = item.fontName || "";
-
-    lines.push({
-      text,
-      bold: /bold/i.test(font)
-    });
-  }
-}
     let customer = "DoorDash";
     let phone = "";
     let items = [];
@@ -184,15 +165,46 @@ for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
   continue;
 }
 
-      if (current && line.bold) {
+      if (/^[•+]/.test(line) && current) {
 
-  let mod = line.text;
+  let mod = line.replace(/^[•+]\s*/, "").trim();
 
-  // remove price additions
+  // remove trailing added price like (+ $1.00)
   mod = mod.replace(/\(\+\s*\$[0-9.]+\)/g, "").trim();
 
-  if (mod) current.modifiers.push(mod);
+  // DoorDash modifier format:
+  // "Flavor Dr. Pepper"
+  // "Selection Glazed Holes"
+  // "Choose a Drink Chocolate Milk"
+  // remove the whole leading caption sentence, keep only the final value
+  const words = mod.split(/\s+/);
 
+  if (words.length > 1) {
+    // keep peeling words from the front until only the final value remains
+    // rule: caption is at the front, actual chosen modifier is at the end
+    // so keep the tail after the last "caption-like" word sequence
+    let cutIndex = 0;
+
+    for (let i = 0; i < words.length - 1; i++) {
+      const w = words[i];
+
+      // caption words are usually normal title/lowercase words, not the final chosen value block
+      // once we hit a word that looks like the start of the actual selected value, stop cutting
+      if (
+        /^[A-Z0-9]/.test(w) &&
+        i > 0 &&
+        !/^(Flavor|Selection|Choose|Choice|Drink|Add|Type|Option|Options|Pick|Picks|Size)$/i.test(w)
+      ) {
+        break;
+      }
+
+      cutIndex = i + 1;
+    }
+
+    mod = words.slice(cutIndex).join(" ").trim();
+  }
+
+  if (mod) current.modifiers.push(mod);
 }
 }
 
