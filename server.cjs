@@ -173,6 +173,7 @@ async function parseDoorDashPDF(msg) {
 
   current.modifiers.push(mod);
 }
+}
 
     return {
       customer,
