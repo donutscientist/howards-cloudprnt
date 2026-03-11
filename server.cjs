@@ -126,125 +126,113 @@ async function parseDoorDashPDF(msg) {
     const data = await pdfParse(pdfBuffer);
     const text = data.text || "";
 
-    const lines = text
-      .split("\n")
-      .map(l => l.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+const lines = text
+  .split("\n")
+  .map(l => l.replace(/\s+/g, " ").trim())
+  .filter(Boolean);
 
-    let customer = "DoorDash";
-    let orderType = "DoorDash";
-    let phone = "";
-    let note = "";
-    let estimate = "";
-    let items = [];
-    let current = null;
+let customer = "DoorDash";
+let phone = "";
+let estimate = "";
+let items = [];
+let current = null;
 
-    // -------------------------
-    // CUSTOMER
-    // first useful customer line after "Customer Order Size Pickup Time"
-    // -------------------------
-    const customerHeaderIndex = lines.findIndex(l =>
-      l.toLowerCase().includes("customer order size pickup time")
-    );
 
-    if (customerHeaderIndex !== -1 && lines[customerHeaderIndex + 1]) {
-      customer = lines[customerHeaderIndex + 1].replace(/\.$/, "").trim();
+// --------------------
+// CUSTOMER + TIME
+// --------------------
+for (let i = 0; i < lines.length; i++) {
+
+  if (lines[i].toLowerCase().includes("customer order size pickup time")) {
+
+    if (lines[i + 1]) {
+      customer = lines[i + 1].replace(/\.$/, "").trim();
     }
 
-    // -------------------------
-    // TIME
-    // use only date + time, omit first 2 words from "Pickup Time"
-    // Example:
-    // Today at 7:12 AM
-    // Mar 10, 2026
-    // -> Mar 10, 2026 7:12 AM
-    // -------------------------
-    let timeLine = "";
-    let dateLine = "";
-
-    for (let i = 0; i < lines.length; i++) {
-      if (/^\d+\s+items$/i.test(lines[i]) && lines[i + 1] && lines[i + 2]) {
-        timeLine = lines[i + 1];
-        dateLine = lines[i + 2];
-        break;
-      }
+    if (lines[i + 2] && lines[i + 3]) {
+      const time = lines[i + 2].replace(/^Today at /i, "").trim();
+      const date = lines[i + 3].trim();
+      estimate = `${date} ${time}`;
     }
 
-    if (timeLine && dateLine) {
-      timeLine = timeLine.replace(/^(Today at|Pickup Time)\s+/i, "").trim();
-      estimate = `${dateLine} ${timeLine}`.trim();
-    }
+    break;
+  }
 
-    // -------------------------
-    // ITEMS + MODIFIERS
-    // start after Qty. Item Price Subtotal
-    // end at ~ End of Order ~
-    // item lines start with qty like 3x ...
-    // modifier lines start with •
-    // -------------------------
-    const startIndex = lines.findIndex(l =>
-      l.toLowerCase().includes("qty. item price subtotal")
-    );
+}
 
-    const endIndex = lines.findIndex(l =>
-      l.toLowerCase().includes("end of order")
-    );
 
-    const section =
-      startIndex !== -1
-        ? lines.slice(startIndex + 1, endIndex !== -1 ? endIndex : lines.length)
-        : [];
+// --------------------
+// ITEMS SECTION
+// --------------------
+let inItems = false;
 
-    for (const line of section) {
-      // item line
-      if (/^\d+x\s+/i.test(line)) {
-        let cleanItem = line;
+for (const line of lines) {
 
-        // remove trailing category text like "(in Donuts)" / "(in Sandwiches)"
-        cleanItem = cleanItem.replace(/\s*\(in [^)]+\)\s*$/i, "").trim();
+  if (line.includes("Qty.") && line.includes("Subtotal")) {
+    inItems = true;
+    continue;
+  }
 
-        // keep only bold-looking main item text
-        current = {
-          item: cleanItem,
-          modifiers: []
-        };
+  if (line.includes("End of Order")) {
+    break;
+  }
 
-        items.push(current);
-        continue;
-      }
+  if (!inItems) continue;
 
-      // modifier line
-      if (line.startsWith("•") && current) {
-        let mod = line.replace(/^•\s*/, "").trim();
 
-        // keep only actual selected modifier, skip fallback/instruction text
-        if (/^If your selection is unavailable:/i.test(mod)) continue;
+  // ITEM
+  let match = line.match(/^(\d+)x\s+(.*)$/i);
 
-        mod = mod.replace(/\*\*/g, "").trim();
+  if (match) {
 
-        // strip labels like "Selection "
-        mod = mod.replace(/^Selection\s+/i, "").trim();
+    const qty = match[1];
+    let name = match[2].trim();
 
-        if (mod) current.modifiers.push(mod);
-      }
-    }
+    name = name.replace(/\(in .*?\)/i, "").trim();
 
-    // total items = sum of item qty
-    let totalQty = 0;
-    for (const it of items) {
-      const m = it.item.match(/^(\d+)x\s+/i);
-      totalQty += m ? parseInt(m[1], 10) : 1;
-    }
-
-    return {
-      customer,
-      orderType,
-      phone,     // blank on purpose
-      totalItems: String(totalQty),
-      items,
-      estimate,
-      note       // blank on purpose
+    current = {
+      item: `${qty}x ${name}`,
+      modifiers: []
     };
+
+    items.push(current);
+    continue;
+  }
+
+
+  // MODIFIER
+  if (line.startsWith("•") && current) {
+
+    let mod = line.replace(/^•\s*/, "").trim();
+
+    if (/^If your selection is unavailable/i.test(mod)) continue;
+
+    current.modifiers.push(mod);
+  }
+
+}
+
+
+// --------------------
+// TOTAL QTY
+// --------------------
+let totalQty = 0;
+
+for (const it of items) {
+  const m = it.item.match(/^(\d+)x/);
+  if (m) totalQty += parseInt(m[1]);
+}
+
+
+return {
+  customer,
+  orderType: "DoorDash",
+  phone: "",
+  totalItems: String(totalQty),
+  items,
+  estimate,
+  note: ""
+};
 
   } catch (err) {
     console.log("DOORDASH ERROR:", err.message);
