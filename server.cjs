@@ -169,40 +169,26 @@ async function parseDoorDashPDF(msg) {
 
   let mod = line.replace(/^[•+]\s*/, "").trim();
 
-  // remove trailing added price like (+ $1.00)
+  // remove trailing price like (+ $1.00)
   mod = mod.replace(/\(\+\s*\$[0-9.]+\)/g, "").trim();
 
-  // DoorDash modifier format:
-  // "Flavor Dr. Pepper"
-  // "Selection Glazed Holes"
-  // "Choose a Drink Chocolate Milk"
-  // remove the whole leading caption sentence, keep only the final value
   const words = mod.split(/\s+/);
 
-  if (words.length > 1) {
-    // keep peeling words from the front until only the final value remains
-    // rule: caption is at the front, actual chosen modifier is at the end
-    // so keep the tail after the last "caption-like" word sequence
-    let cutIndex = 0;
+  let capCount = 0;
+  let startIndex = 0;
 
-    for (let i = 0; i < words.length - 1; i++) {
-      const w = words[i];
+  for (let i = 0; i < words.length; i++) {
+    if (/^[A-Z]/.test(words[i])) {
+      capCount++;
 
-      // caption words are usually normal title/lowercase words, not the final chosen value block
-      // once we hit a word that looks like the start of the actual selected value, stop cutting
-      if (
-        /^[A-Z0-9]/.test(w) &&
-        i > 0 &&
-        !/^(Flavor|Selection|Choose|Choice|Drink|Add|Type|Option|Options|Pick|Picks|Size)$/i.test(w)
-      ) {
+      if (capCount === 2) {
+        startIndex = i;
         break;
       }
-
-      cutIndex = i + 1;
     }
-
-    mod = words.slice(cutIndex).join(" ").trim();
   }
+
+  mod = words.slice(startIndex).join(" ").trim();
 
   if (mod) current.modifiers.push(mod);
 }
