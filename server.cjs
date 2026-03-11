@@ -2,7 +2,7 @@ const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
-const pdfjs = require("pdfjs-dist/legacy/build/pdf.js");
+const pdfjs = require("pdfjs-dist");
 
 const app = express();
 app.use(express.raw({ type: "*/*" }));
