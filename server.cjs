@@ -120,9 +120,11 @@ async function parseDoorDashPDF(msg) {
       id: attachmentId
     });
 
-    const pdfBuffer = Buffer.from(
-  attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
-  "base64"
+    const pdfBuffer = new Uint8Array(
+  Buffer.from(
+    attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
+    "base64"
+  )
 );
 
     const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
