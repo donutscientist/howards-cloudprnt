@@ -89,21 +89,12 @@ function getPlainBody(payload) {
 ////////////////////////////////////////////////////
 // DOORDASH PDF PARSER
 ////////////////////////////////////////////////////
-
-
-    ////////////////////////////////////////////////////
-// DOORDASH PDF PARSER
-////////////////////////////////////////////////////
 async function parseDoorDashPDF(msg) {
 
   function findPDF(part) {
     if (!part) return null;
 
-    if (
-      part.filename &&
-      part.filename.toLowerCase().endsWith(".pdf") &&
-      part.body?.attachmentId
-    ) {
+    if (part.filename && part.filename.toLowerCase().endsWith(".pdf")) {
       return part.body.attachmentId;
     }
 
@@ -118,6 +109,7 @@ async function parseDoorDashPDF(msg) {
   }
 
   try {
+
     const attachmentId = findPDF(msg.data.payload);
     if (!attachmentId) return null;
 
@@ -128,152 +120,67 @@ async function parseDoorDashPDF(msg) {
     });
 
     const pdfBuffer = Buffer.from(
-      attachment.data.data.replace(/-/g, "+").replace(/_/g, "/"),
-      "base64"
-    );
+  attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
+  "base64"
+);
 
     const data = await pdfParse(pdfBuffer);
+
     const text = data.text || "";
 
-    const lines = text
-      .split("\n")
-      .map(l => l.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
     let customer = "DoorDash";
-    let estimate = "";
+    let phone = "";
     let items = [];
     let current = null;
 
-    // -------------------------
-    // CUSTOMER + TIME
-    // -------------------------
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].toLowerCase();
+    for (const line of lines) {
 
-      if (line.includes("customer order size pickup time")) {
-        // customer is first useful line after header
-        if (lines[i + 1]) {
-          customer = lines[i + 1]
-            .replace(/\.$/, "")
-            .trim();
-        }
-
-        // look ahead for date + time
-        for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
-          const maybeTime = lines[j];
-          const maybeDate = lines[j + 1] || "";
-
-          const hasTime =
-            /today at /i.test(maybeTime) ||
-            /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(maybeTime);
-
-          const hasDate =
-            /\b[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}\b/.test(maybeDate);
-
-          if (hasTime && hasDate) {
-            const cleanTime = maybeTime
-              .replace(/^today at\s+/i, "")
-              .replace(/^pickup time\s+/i, "")
-              .trim();
-
-            estimate = `${maybeDate} ${cleanTime}`.trim();
-            break;
-          }
-        }
-
-        break;
-      }
-    }
-
-    // -------------------------
-    // ITEMS SECTION
-    // Start after Qty...Subtotal
-    // End at End of Order
-    // -------------------------
-    let inItems = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      if (!inItems && /qty\..*subtotal/i.test(line)) {
-        inItems = true;
-        continue;
+      if (/\(\d{3}\)/.test(line)) {
+        phone = line;
       }
 
-      if (!inItems) continue;
+      if (/^\d+\s*x/i.test(line)) {
 
-      if (/end of order/i.test(line)) {
-        break;
-      }
+  // STOP if we hit totals section
+  if (/total items|subtotal|tax/i.test(line.toLowerCase())) {
+    break;
+  }
 
-      // item line like: 3x Dozen Donut Holes (in )Donuts
-      let itemMatch = line.match(/^(\d+)x\s+(.*)$/i);
+  const parts = line.split("x");
 
-      // handle split case:
-      // 3x
-      // Dozen Donut Holes (in )Donuts
-      if (!itemMatch && /^(\d+)x$/i.test(line) && lines[i + 1]) {
-        itemMatch = [line + " " + lines[i + 1], line.match(/^(\d+)x$/i)[1], lines[i + 1]];
-        i++;
-      }
+  const qty = parts[0].trim();
+  let name = parts.slice(1).join("x").trim();
 
-      if (itemMatch) {
-        const qty = itemMatch[1];
-        let name = itemMatch[2].trim();
+  // remove category tail like "(in )Donuts"
+  name = name.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
 
-        // remove category tail like "(in )Donuts" or "(in )Sandwiches"
-        name = name
-          .replace(/\(in\s*\)\s*[A-Za-z& ]+$/i, "")
-          .replace(/\(in\s+[A-Za-z& ]+\)$/i, "")
-          .trim();
+  current = {
+    item: `${qty}x ${name}`,
+    modifiers: []
+  };
 
-        // skip junk totals accidentally matching
-        if (
-          /^(total items|subtotal|tax|fees?|discount|merchant/i.test(name)
-        ) {
-          continue;
-        }
+  items.push(current);
+  continue;
+}
 
-        current = {
-          item: `${qty}x ${name}`,
-          modifiers: []
-        };
+      if (/^[•+]/.test(line) && current) {
 
-        items.push(current);
-        continue;
-      }
+  let mod = line.replace(/^[•+]\s*/, "").trim();
 
-      // modifier line starts with bullet
-      if (/^[•·]/.test(line) && current) {
-        let mod = line.replace(/^[•·]\s*/, "").trim();
+  mod = mod.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
 
-        // remove category tail if present
-        mod = mod
-          .replace(/\(in\s*\)\s*[A-Za-z& ]+$/i, "")
-          .replace(/\(in\s+[A-Za-z& ]+\)$/i, "")
-          .trim();
-
-        if (mod) current.modifiers.push(mod);
-      }
-    }
-
-    // -------------------------
-    // TOTAL ITEMS = sum of qty
-    // -------------------------
-    let totalQty = 0;
-    for (const it of items) {
-      const m = it.item.match(/^(\d+)x\s+/i);
-      totalQty += m ? parseInt(m[1], 10) : 1;
-    }
+  current.modifiers.push(mod);
+}
 
     return {
       customer,
       orderType: "DoorDash",
-      phone: "",
-      totalItems: String(totalQty),
+      phone,
+      totalItems: String(items.length),
       items,
-      estimate,
+      estimate: "",
       note: ""
     };
 
@@ -281,6 +188,7 @@ async function parseDoorDashPDF(msg) {
     console.log("DOORDASH ERROR:", err.message);
     return null;
   }
+
 }
 
 // --------------------
