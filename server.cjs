@@ -169,17 +169,25 @@ async function parseDoorDashPDF(msg) {
 
   let mod = line.replace(/^[•+]\s*/, "").trim();
 
+  // remove italic prefix (Flavor, Selection, etc)
+  mod = mod.replace(/^[A-Za-z]+\s+/, "");
+
+  // remove category tail if present
   mod = mod.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
 
-  current.modifiers.push(mod);
-}
+  if (mod) current.modifiers.push(mod);
 }
 
     return {
       customer,
       orderType: "DoorDash",
       phone,
-      totalItems: String(items.length),
+      totalItems: String(
+  items.reduce((sum, i) => {
+    const m = i.item.match(/^(\d+)x/);
+    return sum + (m ? parseInt(m[1]) : 1);
+  }, 0)
+),
       items,
       estimate: "",
       note: ""
