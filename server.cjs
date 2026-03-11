@@ -2,6 +2,7 @@ const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
+const pdfjs = require("pdfjs-dist/legacy/build/pdf.js");
 
 const app = express();
 app.use(express.raw({ type: "*/*" }));
@@ -124,12 +125,28 @@ async function parseDoorDashPDF(msg) {
   "base64"
 );
 
-    const data = await pdfParse(pdfBuffer);
+    const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
+const pdf = await loadingTask.promise;
 
-    const text = data.text || "";
+let lines = [];
 
-    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+  const page = await pdf.getPage(pageNum);
+  const content = await page.getTextContent();
 
+  for (const item of content.items) {
+
+    const text = item.str.trim();
+    if (!text) continue;
+
+    const font = item.fontName || "";
+
+    lines.push({
+      text,
+      bold: /bold/i.test(font)
+    });
+  }
+}
     let customer = "DoorDash";
     let phone = "";
     let items = [];
@@ -165,17 +182,15 @@ async function parseDoorDashPDF(msg) {
   continue;
 }
 
-      if (/^[•+]/.test(line) && current) {
+      if (current && line.bold) {
 
-  let mod = line.replace(/^[•+]\s*/, "").trim();
+  let mod = line.text;
 
-  // remove italic prefix (Flavor, Selection, etc)
-  mod = mod.replace(/^[A-Za-z]+\s+/, "");
-
-  // remove category tail if present
-  mod = mod.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
+  // remove price additions
+  mod = mod.replace(/\(\+\s*\$[0-9.]+\)/g, "").trim();
 
   if (mod) current.modifiers.push(mod);
+
 }
 }
 
