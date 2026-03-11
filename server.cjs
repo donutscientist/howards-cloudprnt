@@ -143,51 +143,42 @@ let current = null;
 // --------------------
 for (let i = 0; i < lines.length; i++) {
 
-  if (lines[i].toLowerCase().includes("customer order size pickup time")) {
+  const line = lines[i];
 
+  // -------------------------
+  // CUSTOMER NAME
+  // -------------------------
+  if (line.includes("Customer Order Size Pickup Time")) {
     if (lines[i + 1]) {
-      customer = lines[i + 1].replace(/\.$/, "").trim();
+      const parts = lines[i + 1].split(/\s{2,}|\t/);
+      if (parts.length > 0) {
+        customer = parts[0].replace(/\.$/, "").trim();
+      }
     }
-
-    if (lines[i + 2] && lines[i + 3]) {
-      const time = lines[i + 2].replace(/^Today at /i, "").trim();
-      const date = lines[i + 3].trim();
-      estimate = `${date} ${time}`;
-    }
-
-    break;
   }
 
-}
+  // -------------------------
+  // PICKUP TIME
+  // -------------------------
+  if (/Today at/i.test(line) && lines[i + 1]) {
 
+    const time = line.replace(/^Today at\s*/i, "").trim();
+    const date = lines[i + 1].trim();
 
-// --------------------
-// ITEMS SECTION
-// --------------------
-let inItems = false;
-
-for (const line of lines) {
-
-  if (line.includes("Qty.") && line.includes("Subtotal")) {
-    inItems = true;
-    continue;
+    estimate = `${date} ${time}`;
   }
 
-  if (line.includes("End of Order")) {
-    break;
-  }
+  // -------------------------
+  // ITEM DETECTION
+  // -------------------------
+  if (/^\d+x\s+/i.test(line)) {
 
-  if (!inItems) continue;
+    const parts = line.split("x");
 
+    const qty = parts[0].trim();
+    let name = parts.slice(1).join("x").trim();
 
-  // ITEM
-  let match = line.match(/^(\d+)x\s+(.*)$/i);
-
-  if (match) {
-
-    const qty = match[1];
-    let name = match[2].trim();
-
+    // remove category
     name = name.replace(/\(in .*?\)/i, "").trim();
 
     current = {
@@ -199,8 +190,9 @@ for (const line of lines) {
     continue;
   }
 
-
-  // MODIFIER
+  // -------------------------
+  // MODIFIERS (bullet •)
+  // -------------------------
   if (line.startsWith("•") && current) {
 
     let mod = line.replace(/^•\s*/, "").trim();
@@ -228,7 +220,12 @@ return {
   customer,
   orderType: "DoorDash",
   phone: "",
-  totalItems: String(totalQty),
+  totalItems: String(
+  items.reduce((sum,i)=>{
+    const m=i.item.match(/^(\d+)x/);
+    return sum + (m?parseInt(m[1]):1);
+  },0)
+),
   items,
   estimate,
   note: ""
