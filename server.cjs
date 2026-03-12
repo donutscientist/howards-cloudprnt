@@ -733,17 +733,11 @@ app.post("/starcloudprnt", (req, res) => {
 
   const pollInterval = getBusinessInterval();
 
-  console.log("POLL INTERVAL:", pollInterval);
-
-  // NIGHT MODE: tell printer to back off completely
+  // NIGHT MODE
   if (pollInterval === 18000) {
-  console.log("NIGHT MODE");
-
-  return res.json({
-    jobReady: false,
-    nextPollInterval: pollInterval
-  });
-}
+    console.log("NIGHT MODE - CLOUDPRNT OFF");
+    return res.status(404).send();
+  }
   
   if (pending.length > 0) {
     const next = pending[0];
@@ -765,13 +759,11 @@ app.post("/starcloudprnt", (req, res) => {
 });
 
 app.get("/starcloudprnt", (req, res) => {
-  const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-  console.log("PRINTER REQUESTED:", token);
-  console.log("PENDING:", pending);
+  const pollInterval = getBusinessInterval();
 
-  if (!token || !activeJobs.has(token)) {
-    return res.status(204).send();
+  if (pollInterval === 18000) {
+    return res.status(404).send();
   }
 
   const job = activeJobs.get(token);
