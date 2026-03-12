@@ -733,14 +733,13 @@ app.post("/starcloudprnt", (req, res) => {
 
   const pollInterval = getBusinessInterval();
 
-  // NIGHT MODE — intentionally break the endpoint
-  if (pollInterval === 18000) {
-    console.log("NIGHT MODE - INTENTIONAL TIMEOUT");
-    return; // do not respond
-  }
+  console.log("POLL INTERVAL:", pollInterval);
 
-  // ...rest of your normal CloudPRNT logic
-});
+  // NIGHT MODE: tell printer to back off completely
+  if (pollInterval === 18000) {
+  console.log("NIGHT MODE - REJECT POLL");
+  return res.status(204).send();
+  }
   
   if (pending.length > 0) {
     const next = pending[0];
@@ -762,16 +761,14 @@ app.post("/starcloudprnt", (req, res) => {
 });
 
 app.get("/starcloudprnt", (req, res) => {
+  const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-  const pollInterval = getBusinessInterval();
+  console.log("PRINTER REQUESTED:", token);
+  console.log("PENDING:", pending);
 
-  if (pollInterval === 18000) {
-    console.log("NIGHT MODE - INTENTIONAL TIMEOUT");
-    return; // no response
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
   }
-
-  // normal job delivery logic
-});
 
   const job = activeJobs.get(token);
 
