@@ -636,14 +636,15 @@ if (platform === "DD") {
   }
 
   // -------------------
-  // ORDER ID
-  // -------------------
-  let orderId = "";
+// ORDER ID
+// -------------------
+let orderId = "";
 
-  const idMatch = subject.match(/#(\d+)/);
-  if (idMatch) {
-    orderId = idMatch[1];
-  }
+const idMatch = subject.match(/\b\d{6,}\b/);
+
+if (idMatch) {
+  orderId = idMatch[0];
+}
 
   // -------------------
   // DELIVERY OR PICKUP
