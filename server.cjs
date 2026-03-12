@@ -620,9 +620,54 @@ else {
 }
 if (platform === "DD") {
 
+  const headers = msg.data.payload.headers;
+
+  const subject =
+    headers.find(h => h.name === "Subject")?.value || "";
+
+  // -------------------
+  // CUSTOMER NAME
+  // -------------------
+  let customer = "DoorDash";
+
+  const nameMatch = subject.match(/order from (.+?) for/i);
+  if (nameMatch) {
+    customer = nameMatch[1].trim();
+  }
+
+  // -------------------
+  // ORDER ID
+  // -------------------
+  let orderId = "";
+
+  const idMatch = subject.match(/#(\d+)/);
+  if (idMatch) {
+    orderId = idMatch[1];
+  }
+
+  // -------------------
+  // DELIVERY OR PICKUP
+  // -------------------
+  let orderType = "DoorDash Pickup";
+
+  if (/delivery/i.test(subject)) {
+    orderType = "DoorDash Delivery";
+  }
+
+  // -------------------
+  // PARSE PDF
+  // -------------------
   const parsedDD = await parseDoorDashPDF(msg);
 
   if (parsedDD) {
+
+    parsedDD.customer = customer;
+    parsedDD.orderType = orderType;
+
+    if (orderId) {
+      parsedDD.note = `Order #${orderId}`;
+    }
+
     parsed = parsedDD;
   }
 
