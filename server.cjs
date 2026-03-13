@@ -470,23 +470,23 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   const line = (txt, indent = "") => b.push(Buffer.from(cut32(txt, indent) + "\n", "ascii"));
 
   // Header (ALL CUT TO 32)
-  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(customer, " ");  b.push(Buffer.from([0x1B, 0x45, 0x00]));
-  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(orderType, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(customer, "  ");  b.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(orderType, "  "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
 
   if (phone) {
-    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(phone, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
+    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(phone, "  "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
-  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(`Total Items: ${totalItems}`, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line(`Total Items: ${totalItems}`, "  "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
 
   if (note) {
     b.push(Buffer.from([0x1B, 0x45, 0x01]));
-    line(`NOTE: ${note}`, " "); // also hard-cut
+    line(`NOTE: ${note}`, "  "); // also hard-cut
     b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
   if (estimate) {
-    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(estimate, " "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
+    b.push(Buffer.from([0x1B, 0x45, 0x01])); line(estimate, "  "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
   }
 
   // Items + modifiers
@@ -496,7 +496,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
     // ITEM: keep your indentation + styles, but still hard-cut
     b.push(Buffer.from([0x1B, 0x45, 0x01])); // bold
     b.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline
-    line(order.item, " "); // <-- item indent (change to "  " if you want 2 spaces)
+    line(order.item, "  "); // <-- item indent (change to "  " if you want 2 spaces)
     b.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline off
     b.push(Buffer.from([0x1B, 0x45, 0x00])); // bold off
 
