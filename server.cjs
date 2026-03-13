@@ -804,6 +804,49 @@ app.get("/starcloudprnt", (req, res) => {
 });
 
 // --------------------
+// CLEANUP
+// --------------------
+async function cleanupOldOrders() {
+
+  try {
+
+    console.log("CLEANUP START");
+
+    const labels = ["GH_PRINT", "DD_PRINT", "SQ_PRINT"];
+
+    for (const label of labels) {
+
+      const res = await gmail.users.messages.list({
+        userId: "me",
+        q: `label:${label} older_than:7d`,
+        maxResults: 500
+      });
+
+      if (!res.data.messages) continue;
+
+      for (const msg of res.data.messages) {
+
+        await gmail.users.messages.delete({
+          userId: "me",
+          id: msg.id
+        });
+
+        console.log("DELETED:", label, msg.id);
+      }
+
+    }
+
+    console.log("CLEANUP COMPLETE");
+
+  } catch (err) {
+
+    console.log("CLEANUP ERROR:", err.message);
+
+  }
+
+}
+
+// --------------------
 // LOOP
 // --------------------
 function scheduleEmailCheck() {
@@ -817,7 +860,17 @@ function scheduleEmailCheck() {
     scheduleEmailCheck();
   }, interval);
 }
+function scheduleCleanup() {
+
+  setInterval(() => {
+
+    cleanupOldOrders();
+
+  }, 24 * 60 * 60 * 1000); // once per day
+
+}
 scheduleEmailCheck();
+scheduleCleanup();
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });
