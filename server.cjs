@@ -625,39 +625,40 @@ if (platform === "DD") {
   const subject =
     headers.find(h => h.name === "Subject")?.value || "";
 
-  // -------------------
   // CUSTOMER NAME
-  // -------------------
   let customer = "DoorDash";
-
   const nameMatch = subject.match(/order from (.+?) for/i);
   if (nameMatch) {
     customer = nameMatch[1].trim();
   }
 
-  // -------------------
-// ORDER ID
-// -------------------
-let orderId = "";
-
-const idMatch = subject.match(/Order\s*#\s*([A-Za-z0-9]+)/i);
-
-if (idMatch) {
-  orderId = idMatch[1];
-}
-
-const parsedDD = await parseDoorDashPDF(msg);
-
-if (parsedDD) {
-
-  parsedDD.customer = customer;
-  parsedDD.orderType = orderType;
-
-  if (orderId) {
-    parsedDD.phone = `Order #${orderId}`;
+  // ORDER TYPE
+  let orderType = "DoorDash Pickup";
+  if (/delivery/i.test(subject)) {
+    orderType = "DoorDash Delivery";
   }
 
-  parsed = parsedDD;
+  // ORDER ID
+  let orderId = "";
+  const idMatch = subject.match(/Order\s*#\s*([A-Za-z0-9]+)/i);
+  if (idMatch) {
+    orderId = idMatch[1];
+  }
+
+  // PARSE PDF (ONLY DECLARE ONCE)
+  const parsedDD = await parseDoorDashPDF(msg);
+
+  if (parsedDD) {
+
+    parsedDD.customer = customer;
+    parsedDD.orderType = orderType;
+
+    if (orderId) {
+      parsedDD.phone = `Order #${orderId}`;
+    }
+
+    parsed = parsedDD;
+  }
 }
 
   // -------------------
