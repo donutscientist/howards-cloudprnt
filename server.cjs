@@ -822,17 +822,18 @@ async function cleanupOldOrders() {
         maxResults: 500
       });
 
-      if (!res.data.messages) continue;
+      if (!res.data.messages || res.data.messages.length === 0) continue;
 
-      for (const msg of res.data.messages) {
+      const ids = res.data.messages.map(m => m.id);
 
-        await gmail.users.messages.delete({
-          userId: "me",
-          id: msg.id
-        });
+      await gmail.users.messages.batchDelete({
+        userId: "me",
+        requestBody: {
+          ids: ids
+        }
+      });
 
-        console.log("DELETED:", label, msg.id);
-      }
+      console.log(`DELETED ${ids.length} from ${label}`);
 
     }
 
