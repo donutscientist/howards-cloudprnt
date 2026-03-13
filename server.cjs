@@ -640,10 +640,24 @@ if (platform === "DD") {
 // -------------------
 let orderId = "";
 
-const idMatch = subject.match(/\b\d{6,}\b/);
+const idMatch = subject.match(/Order\s*#\s*([A-Za-z0-9]+)/i);
 
 if (idMatch) {
-  orderId = idMatch[0];
+  orderId = idMatch[1];
+}
+
+const parsedDD = await parseDoorDashPDF(msg);
+
+if (parsedDD) {
+
+  parsedDD.customer = customer;
+  parsedDD.orderType = orderType;
+
+  if (orderId) {
+    parsedDD.phone = `Order #${orderId}`;
+  }
+
+  parsed = parsedDD;
 }
 
   // -------------------
