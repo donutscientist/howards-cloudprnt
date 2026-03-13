@@ -154,7 +154,7 @@ async function parseDoorDashPDF(msg) {
   let name = parts.slice(1).join("x").trim();
 
   // remove category tail like "(in )Donuts"
-  name = name.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
+  name = name.replace(/\(in\s*\).*/i, "").trim();
 
   current = {
     item: `${qty}x ${name}`,
