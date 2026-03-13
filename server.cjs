@@ -167,6 +167,9 @@ async function parseDoorDashPDF(msg) {
 
       if (/^[•+]/.test(line) && current) {
 
+  // ❌ Skip garbage lines DoorDash sometimes adds
+  if (line.includes("*")) continue;
+
   let mod = line.replace(/^[•+]\s*/, "").trim();
 
   // remove trailing price like (+ $1.00)
@@ -191,7 +194,6 @@ async function parseDoorDashPDF(msg) {
   mod = words.slice(startIndex).join(" ").trim();
 
   if (mod) current.modifiers.push(mod);
-}
 }
 
     return {
