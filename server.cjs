@@ -247,14 +247,6 @@ function parseGrubHub(html) {
     if (pickupLabel.length) customer = pickupLabel.next("div").text().trim() || customer;
   }
 
-  let totalItems = "0";
-  const totalP = $("p")
-    .filter((i, el) => /\b\d+\s*item\b/i.test($(el).text().replace(/\s+/g, " ").trim()))
-    .first();
-  if (totalP.length) {
-    const m = totalP.text().replace(/\s+/g, " ").match(/(\d+)\s*item/i);
-    if (m) totalItems = m[1];
-  }
 
   const items = [];
 
@@ -286,8 +278,14 @@ function parseGrubHub(html) {
     items.push(currentItem);
   });
 
-  return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
-}
+  const totalItems = String(
+  items.reduce((sum, i) => {
+    const m = i.item.match(/^(\d+)x/);
+    return sum + (m ? parseInt(m[1]) : 1);
+  }, 0)
+);
+
+return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
 
 
 
