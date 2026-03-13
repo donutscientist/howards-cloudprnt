@@ -600,13 +600,31 @@ else {
     let parsed = null;
 
     if (platform === "GH") {
-      const html = getHtmlBody(msg.data.payload)
-        .replace(/\u00A0/g, " ")
-        .replace(/\t/g, " ")
-        .replace(/\r/g, "")
-        .replace(/[ ]+/g, " ");
-      parsed = parseGrubHub(html);
-    }
+
+  const headers = msg.data.payload.headers;
+
+  const subject =
+    headers.find(h => h.name === "Subject")?.value || "";
+
+  // Extract order ID
+  let orderId = "";
+  const match = subject.match(/Order\s*([0-9\-]+)/i);
+  if (match) {
+    orderId = match[1];
+  }
+
+  const html = getHtmlBody(msg.data.payload)
+    .replace(/\u00A0/g, " ")
+    .replace(/\t/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ ]+/g, " ");
+
+  parsed = parseGrubHub(html);
+
+  if (parsed && orderId) {
+    parsed.phone = `Order #${orderId}`;
+  }
+}
 
     if (platform === "SQ") {
 
