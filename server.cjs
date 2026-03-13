@@ -287,7 +287,7 @@ function parseGrubHub(html) {
 
 return { customer, orderType, phone, totalItems, items, estimate: "", note: "" };
 
-
+}
 
 function cleanModifierText(raw) {
   let s = (raw || "").replace(/\u00A0/g, " ").trim();
