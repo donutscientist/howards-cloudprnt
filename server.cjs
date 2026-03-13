@@ -628,6 +628,18 @@ else {
 
     if (platform === "SQ") {
 
+  const headers = msg.data.payload.headers;
+
+  const subject =
+    headers.find(h => h.name === "Subject")?.value || "";
+
+  // Extract Square order ID
+  let orderId = "";
+  const match = subject.match(/Order\s*#(\d+)/i);
+  if (match) {
+    orderId = match[1];
+  }
+
   const html = getHtmlBody(msg.data.payload)
     .replace(/\u00A0/g, " ")
     .replace(/\t/g, " ")
@@ -635,6 +647,10 @@ else {
     .replace(/[ ]+/g, " ");
 
   parsed = parseSquareHTML(html);
+
+  if (parsed && orderId) {
+    parsed.phone = `Order #${orderId}`;
+  }
 }
 if (platform === "DD") {
 
