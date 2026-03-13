@@ -195,7 +195,7 @@ async function parseDoorDashPDF(msg) {
 
   if (mod) current.modifiers.push(mod);
 }
-
+}
     return {
       customer,
       orderType: "DoorDash",
