@@ -645,11 +645,9 @@ if (platform === "DD") {
     orderId = idMatch[1];
   }
 
-  // PARSE PDF (ONLY DECLARE ONCE)
   const parsedDD = await parseDoorDashPDF(msg);
 
   if (parsedDD) {
-
     parsedDD.customer = customer;
     parsedDD.orderType = orderType;
 
@@ -659,34 +657,6 @@ if (platform === "DD") {
 
     parsed = parsedDD;
   }
-}
-
-  // -------------------
-  // DELIVERY OR PICKUP
-  // -------------------
-  let orderType = "DoorDash Pickup";
-
-  if (/delivery/i.test(subject)) {
-    orderType = "DoorDash Delivery";
-  }
-
-  // -------------------
-  // PARSE PDF
-  // -------------------
-  const parsedDD = await parseDoorDashPDF(msg);
-
-  if (parsedDD) {
-
-    parsedDD.customer = customer;
-    parsedDD.orderType = orderType;
-
-    if (orderId) {
-      parsedDD.note = `Order #${orderId}`;
-    }
-
-    parsed = parsedDD;
-  }
-
 }
     if (!parsed) return;
 
