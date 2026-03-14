@@ -4,9 +4,9 @@ const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 
 const app = express();
-
+let manualMode = null; // null = automatic schedule
+let mode = null;
 function isBusinessHours() {
-
   const now = new Date().toLocaleString("en-US", {
     timeZone: "America/Chicago",
     hour: "2-digit",
@@ -22,7 +22,23 @@ function isBusinessHours() {
 
   return time >= open && time <= close;
 }
-let mode = isBusinessHours() ? "day" : "night";
+
+function getCurrentMode() {
+
+  if (manualMode === "day") return "day";
+  if (manualMode === "night") return "night";
+
+  const forced = process.env.FORCE_MODE;
+
+  if (forced === "day") return "day";
+  if (forced === "night") return "night";
+
+  return isBusinessHours() ? "day" : "night";
+
+}
+mode = getCurrentMode();
+console.log("SERVER START MODE:", mode);
+
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
@@ -805,37 +821,84 @@ if (mode === "night") {
 // LOOP
 // --------------------
 function scheduleEmailCheck() {
+  const currentMode = getCurrentMode();
 
-  const interval = 5000;
+  const interval = currentMode === "day"
+    ? 2000
+    : 12 * 60 * 60 * 1000; // 12 hours
 
-  if (!isBusinessHours()) {
-    console.log("EMAIL CHECK SLEEPING");
-    setTimeout(scheduleEmailCheck, 60000);
-    return;
-  }
-
-  console.log("EMAIL INTERVAL:", interval);
+  console.log("EMAIL CHECK INTERVAL:", interval / 1000, "seconds");
 
   setTimeout(async () => {
-    await checkEmail();
+    if (getCurrentMode() === "day") {
+      await checkEmail();
+    } else {
+      console.log("STORE CLOSED - email check skipped");
+    }
+
     scheduleEmailCheck();
   }, interval);
 }
-scheduleEmailCheck();
 
 function checkModeSwitch() {
 
-  const newMode = isBusinessHours() ? "day" : "night";
+  const scheduledMode = isBusinessHours() ? "day" : "night";
+  const currentMode = getCurrentMode();
 
-  if (newMode !== mode) {
+  // If manual override is active AND schedule time has arrived
+  if (manualMode && scheduledMode !== currentMode) {
 
-    console.log("MODE CHANGE:", mode, "→", newMode);
+    console.log("SCHEDULE OVERRIDES MANUAL MODE");
+    manualMode = null;
 
-    process.exit(0); // Render auto restarts service
+    process.exit(0);
+    return;
+  }
+
+  // Normal automatic switch
+  if (!manualMode && scheduledMode !== mode) {
+
+    console.log("MODE CHANGE:", mode, "->", scheduledMode);
+    process.exit(0);
 
   }
 
 }
+
+scheduleEmailCheck();
+
+
+app.get("/day", (req, res) => {
+  manualMode = "day";
+  console.log("MANUAL MODE -> DAY");
+  res.send("Switching to DAY mode and restarting...");
+  setTimeout(() => process.exit(0), 1000);
+});
+
+app.get("/night", (req, res) => {
+  manualMode = "night";
+  console.log("MANUAL MODE -> NIGHT");
+  res.send("Switching to NIGHT mode and restarting...");
+  setTimeout(() => process.exit(0), 1000);
+});
+
+app.get("/auto", (req, res) => {
+  manualMode = null;
+  console.log("MANUAL MODE CLEARED -> AUTO");
+  res.send("Returning to AUTO mode and restarting...");
+  setTimeout(() => process.exit(0), 1000);
+});
+
+
+app.get("/restart", (req, res) => {
+  console.log("MANUAL RESTART TEST");
+  res.send("Restart test triggered...");
+  setTimeout(() => process.exit(0), 1000);
+});
+
+app.get("/", (req, res) => {
+  res.send(`ok | mode=${getCurrentMode()} | manual=${manualMode || "auto"}`);
+});
 
 setInterval(checkModeSwitch, 60000);
 
