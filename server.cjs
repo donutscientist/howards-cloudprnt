@@ -4,12 +4,15 @@ const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 
 const app = express();
+app.use(express.raw({ type: "*/*" }));
 
-let openTime = 4 * 60 + 30; // 4:30 AM
-let closeTime = 17 * 60;    // 5:00 PM
+let defaultOpenTime = 4 * 60 + 30; // 4:30 AM
+let defaultCloseTime = 17 * 60;    // 5:00 PM
+
+let openTime = defaultOpenTime;
+let closeTime = defaultCloseTime;
 
 function isBusinessHours() {
-
   const now = new Date().toLocaleString("en-US", {
     timeZone: "America/Chicago",
     hour: "2-digit",
@@ -17,29 +20,19 @@ function isBusinessHours() {
     hour12: false
   });
 
-  const [h,m] = now.split(":").map(Number);
+  const [h, m] = now.split(":").map(Number);
   const time = h * 60 + m;
 
   return time >= openTime && time <= closeTime;
-
 }
 
-function getCurrentMode(){
+function getCurrentMode() {
   return isBusinessHours() ? "day" : "night";
 }
 
 let mode = getCurrentMode();
 console.log("SERVER START MODE:", mode);
 
-function checkModeSwitch(){
-
-  const currentMode = getCurrentMode();
-
-  console.log("CURRENT MODE:", currentMode);
-
-}
-
-app.use(express.raw({ type: "*/*" }));
 
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
@@ -761,6 +754,8 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
+if (mode === "day") {
+
   app.post("/starcloudprnt", (req, res) => {
 
     const pollInterval = 5;
@@ -804,10 +799,15 @@ if (platform === "DD") {
 
   });
 
+}
 
-  app.get("/sleep", (req,res)=>{
+if (mode === "night") {
+
+  app.get("/sleep", (req, res) => {
     res.send("sleep mode");
   });
+
+}
 
 
 // --------------------
@@ -840,57 +840,56 @@ function checkModeSwitch() {
   if (scheduledMode !== mode) {
 
     console.log("MODE CHANGE:", mode, "->", scheduledMode);
+    console.log("RESTARTING SERVER FOR ROUTE SWITCH");
 
     process.exit(0);
 
   }
 
 }
-
 scheduleEmailCheck();
 
-app.get("/day", (req,res)=>{
+app.get("/day", (req, res) => {
 
   console.log("FORCE DAY MODE");
 
   openTime = 0;
-  closeTime = 24*60;
+  closeTime = 24 * 60;
   mode = getCurrentMode();
-  res.send("Forced DAY mode");
 
+  res.send("Forced DAY mode - restarting...");
+
+  setTimeout(() => process.exit(0), 1000);
 });
 
-app.get("/night", (req,res)=>{
+app.get("/night", (req, res) => {
 
   console.log("FORCE NIGHT MODE");
 
   openTime = 0;
   closeTime = 0;
   mode = getCurrentMode();
-  res.send("Forced NIGHT mode");
 
+  res.send("Forced NIGHT mode - restarting...");
+
+  setTimeout(() => process.exit(0), 1000);
 });
 
-
-app.get("/auto", (req,res)=>{
+app.get("/auto", (req, res) => {
 
   console.log("RETURNING TO AUTO SCHEDULE");
 
-  openTime = 4*60 + 30;
-  closeTime = 17*60;
+  openTime = defaultOpenTime;
+  closeTime = defaultCloseTime;
   mode = getCurrentMode();
-  res.send("Auto schedule restored");
 
-});
+  res.send("Auto schedule restored - restarting...");
 
-app.get("/restart", (req, res) => {
-  console.log("MANUAL RESTART TEST");
-  res.send("Restart test triggered...");
   setTimeout(() => process.exit(0), 1000);
 });
 
 app.get("/", (req, res) => {
-  res.send(`ok | mode=${getCurrentMode()}`);
+  res.send(`serverMode=${mode} | scheduleMode=${getCurrentMode()}`);
 });
 
 setInterval(checkModeSwitch, 60000);
