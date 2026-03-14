@@ -4,6 +4,25 @@ const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 
 const app = express();
+
+function isBusinessHours() {
+
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const [h, m] = now.split(":").map(Number);
+  const time = h * 60 + m;
+
+  const open = 4 * 60 + 30;   // 4:30 AM
+  const close = 17 * 60;      // 5:00 PM
+
+  return time >= open && time <= close;
+}
+let mode = isBusinessHours() ? "day" : "night";
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
@@ -725,87 +744,69 @@ if (platform === "DD") {
 // --------------------
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
-function isBusinessHours() {
 
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
+if (mode === "day") {
 
-  const [h, m] = now.split(":").map(Number);
-  const time = h * 60 + m;
+  app.post("/starcloudprnt", (req, res) => {
 
-  const open = 4 * 60 + 30;   // 4:30 AM
-  const close = 17 * 60;      // 5:00 PM
+    const pollInterval = 5;
 
-  return time >= open && time <= close;
-}
+    if (pending.length > 0) {
+      const next = pending[0];
 
-function getBusinessInterval() {
+      return res.json({
+        jobReady: true,
+        mediaTypes: ["application/vnd.star.starprnt"],
+        jobToken: next,
+        contentType: "application/vnd.star.starprnt",
+        nextPollInterval: pollInterval
+      });
+    }
 
-  if (isBusinessHours()) {
-    return 5;        // printer polls every 5 seconds
-  }
-
-  return 18000;     // 5 hours when closed
-}
-
-app.post("/starcloudprnt", (req, res) => {
-
-  const pollInterval = getBusinessInterval();
-
-console.log("POLL INTERVAL:", pollInterval);
-  
-  if (pending.length > 0) {
-    const next = pending[0];
-
-    return res.json({
-      jobReady: true,
-      mediaTypes: ["application/vnd.star.starprnt"],
-      jobToken: next,
-      contentType: "application/vnd.star.starprnt",
+    res.json({
+      jobReady: false,
       nextPollInterval: pollInterval
     });
-  }
 
-  res.json({
-    jobReady: false,
-    nextPollInterval: pollInterval
   });
 
-});
+  app.get("/starcloudprnt", (req, res) => {
 
-app.get("/starcloudprnt", (req, res) => {
-  const token = req.query.token || req.query.jobToken || req.query.jobid;
+    const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-  console.log("PRINTER REQUESTED:", token);
-  console.log("PENDING:", pending);
+    if (!token || !activeJobs.has(token)) {
+      return res.status(204).send();
+    }
 
-  if (!token || !activeJobs.has(token)) {
-    return res.status(204).send();
-  }
+    const job = activeJobs.get(token);
 
-  const job = activeJobs.get(token);
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(job);
 
-  res.setHeader("Content-Type", "application/vnd.star.starprnt");
-  res.setHeader("Content-Length", job.length);
-  res.setHeader("Cache-Control", "no-store");
-  res.send(job);
+    activeJobs.delete(token);
+    pending = pending.filter((t) => t !== token);
 
-  activeJobs.delete(token);
-  pending = pending.filter((t) => t !== token);
+  });
 
-  console.log("PRINTED:", token);
-});
+}
+
+if (mode === "night") {
+
+  app.get("/sleep", (req,res)=>{
+    res.send("sleep mode");
+  });
+
+}
+
 
 // --------------------
 // LOOP
 // --------------------
 function scheduleEmailCheck() {
 
-  const interval = getBusinessInterval() * 1000;
+  const interval = 5000;
 
   if (!isBusinessHours()) {
     console.log("EMAIL CHECK SLEEPING");
@@ -821,6 +822,22 @@ function scheduleEmailCheck() {
   }, interval);
 }
 scheduleEmailCheck();
+
+function checkModeSwitch() {
+
+  const newMode = isBusinessHours() ? "day" : "night";
+
+  if (newMode !== mode) {
+
+    console.log("MODE CHANGE:", mode, "→", newMode);
+
+    process.exit(0); // Render auto restarts service
+
+  }
+
+}
+
+setInterval(checkModeSwitch, 60000);
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
