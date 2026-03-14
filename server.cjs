@@ -765,7 +765,7 @@ if (platform === "DD") {
 
   const pollInterval = 5;
 
-  console.log("PRINTER POLLING", pollInterval);
+  console.log("PRINTER POLLING:", pollInterval, "seconds");
 
   if (pending.length > 0) {
 
@@ -827,7 +827,7 @@ function scheduleEmailCheck() {
     ? 5000
     : 12 * 60 * 60 * 1000; // 12 hours
 
-  console.log("EMAIL CHECK INTERVAL:", interval / 1000, "seconds");
+  console.log("EMAIL CHECKING:", interval / 1000, "seconds");
 
   setTimeout(async () => {
     if (getCurrentMode() === "day") {
