@@ -727,39 +727,18 @@ if (platform === "DD") {
 // --------------------
 function getBusinessInterval() {
 
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-
-  const [h, m] = now.split(':').map(Number);
-  const time = h * 60 + m;
-
-  const wakeStart = 4 * 60 + 30;   // 4:30 AM
-  const openStart = 5 * 60;        // 5:00 AM
-  const closeTime = 17 * 60;       // 5:00 PM
-
-  if ((time >= wakeStart && time < openStart) || 
-      (time >= openStart && time <= closeTime)) {
-    return 5;
+  if (isBusinessHours()) {
+    return 5;        // printer polls every 5 seconds
   }
 
-  return 18000; // 5 hours
+  return 18000;     // 5 hours when closed
 }
 
 app.post("/starcloudprnt", (req, res) => {
 
   const pollInterval = getBusinessInterval();
 
-  console.log("POLL INTERVAL:", pollInterval);
-
-  // NIGHT MODE: tell printer to back off completely
-  if (pollInterval === 18000) {
-  console.log("NIGHT MODE - REJECT POLL");
-  return res.status(204).send();
-  }
+console.log("POLL INTERVAL:", pollInterval);
   
   if (pending.length > 0) {
     const next = pending[0];
@@ -810,6 +789,12 @@ function scheduleEmailCheck() {
 
   const interval = getBusinessInterval() * 1000;
 
+  if (!isBusinessHours()) {
+    console.log("EMAIL CHECK SLEEPING");
+    setTimeout(scheduleEmailCheck, 60000);
+    return;
+  }
+
   console.log("EMAIL INTERVAL:", interval);
 
   setTimeout(async () => {
@@ -818,6 +803,53 @@ function scheduleEmailCheck() {
   }, interval);
 }
 scheduleEmailCheck();
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
-});
+
+let server = null;
+
+function isBusinessHours() {
+
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const [h, m] = now.split(":").map(Number);
+  const time = h * 60 + m;
+
+  const open = 4 * 60 + 30;   // 4:30 AM
+  const close = 17 * 60;      // 5:00 PM
+
+  return time >= open && time <= close;
+}
+
+function controlServer() {
+
+  if (isBusinessHours()) {
+
+    if (!server) {
+
+      server = app.listen(process.env.PORT || 3000, () => {
+        console.log("SERVER STARTED AT", new Date().toLocaleTimeString());
+      });
+
+    }
+
+  } else {
+
+    if (server) {
+
+      console.log("SERVER STOPPED FOR NIGHT AT", new Date().toLocaleTimeString());
+      server.close();
+      server = null;
+
+    }
+
+  }
+
+}
+
+setInterval(controlServer, 60000);
+controlServer();
+
