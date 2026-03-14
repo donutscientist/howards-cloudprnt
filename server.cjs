@@ -804,52 +804,6 @@ function scheduleEmailCheck() {
 }
 scheduleEmailCheck();
 
-let server = null;
-
-function isBusinessHours() {
-
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-
-  const [h, m] = now.split(":").map(Number);
-  const time = h * 60 + m;
-
-  const open = 4 * 60 + 30;   // 4:30 AM
-  const close = 17 * 60;      // 5:00 PM
-
-  return time >= open && time <= close;
-}
-
-function controlServer() {
-
-  if (isBusinessHours()) {
-
-    if (!server) {
-
-      server = app.listen(process.env.PORT || 3000, () => {
-        console.log("SERVER STARTED AT", new Date().toLocaleTimeString());
-      });
-
-    }
-
-  } else {
-
-    if (server) {
-
-      console.log("SERVER STOPPED FOR NIGHT AT", new Date().toLocaleTimeString());
-      server.close();
-      server = null;
-
-    }
-
-  }
-
-}
-
-setInterval(controlServer, 60000);
-controlServer();
-
+app.listen(process.env.PORT || 3000, () => {
+  console.log("SERVER RUNNING");
+});
