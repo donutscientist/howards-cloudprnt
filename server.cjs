@@ -725,6 +725,24 @@ if (platform === "DD") {
 // --------------------
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
+function isBusinessHours() {
+
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const [h, m] = now.split(":").map(Number);
+  const time = h * 60 + m;
+
+  const open = 4 * 60 + 30;   // 4:30 AM
+  const close = 17 * 60;      // 5:00 PM
+
+  return time >= open && time <= close;
+}
+
 function getBusinessInterval() {
 
   if (isBusinessHours()) {
