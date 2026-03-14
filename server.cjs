@@ -196,8 +196,24 @@ if (/subtotal|tax|total|\~ end/i.test(line)) continue;
 
 if (/^\d+x/i.test(line)) {
 
-  // must end with "item"
-  if (!/item$/i.test(line)) continue;
+  // look ahead until we hit "item"
+  let valid = false;
+
+  for (let i = lines.indexOf(line) + 1; i < lines.length; i++) {
+
+    if (/^\d+x/i.test(lines[i])) {
+      // another qty-x appeared first → fake item
+      break;
+    }
+
+    if (/^item$/i.test(lines[i])) {
+      valid = true;
+      break;
+    }
+
+  }
+
+  if (!valid) continue;
 
   let qty = line.match(/^(\d+)/)[1];
 
