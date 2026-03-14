@@ -30,9 +30,6 @@ function getCurrentMode() {
   return isBusinessHours() ? "day" : "night";
 }
 
-let mode = getCurrentMode();
-console.log("SERVER START MODE:", mode);
-
 
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
@@ -754,61 +751,39 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-if (mode === "day") {
+app.post("/starcloudprnt", (req, res) => {
 
-  app.post("/starcloudprnt", (req, res) => {
+  const isOpen = isBusinessHours();
 
-    const pollInterval = 5;
+  const pollInterval = isOpen
+    ? 5               // open hours
+    : 43200;          // 12 hours
 
-    if (pending.length > 0) {
-      const next = pending[0];
-
-      return res.json({
-        jobReady: true,
-        mediaTypes: ["application/vnd.star.starprnt"],
-        jobToken: next,
-        contentType: "application/vnd.star.starprnt",
-        nextPollInterval: pollInterval
-      });
-    }
-
-    res.json({
+  if (!isOpen) {
+    return res.json({
       jobReady: false,
       nextPollInterval: pollInterval
     });
+  }
 
+  if (pending.length > 0) {
+    const next = pending[0];
+
+    return res.json({
+      jobReady: true,
+      mediaTypes: ["application/vnd.star.starprnt"],
+      jobToken: next,
+      contentType: "application/vnd.star.starprnt",
+      nextPollInterval: pollInterval
+    });
+  }
+
+  res.json({
+    jobReady: false,
+    nextPollInterval: pollInterval
   });
 
-  app.get("/starcloudprnt", (req, res) => {
-
-    const token = req.query.token || req.query.jobToken || req.query.jobid;
-
-    if (!token || !activeJobs.has(token)) {
-      return res.status(204).send();
-    }
-
-    const job = activeJobs.get(token);
-
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control", "no-store");
-    res.send(job);
-
-    activeJobs.delete(token);
-    pending = pending.filter((t) => t !== token);
-
-  });
-
-}
-
-if (mode === "night") {
-
-  app.get("/sleep", (req, res) => {
-    res.send("sleep mode");
-  });
-
-}
-
+});
 
 // --------------------
 // LOOP
@@ -833,66 +808,12 @@ function scheduleEmailCheck() {
   }, interval);
 }
 
-function checkModeSwitch() {
-
-  const scheduledMode = getCurrentMode();
-
-  if (scheduledMode !== mode) {
-
-    console.log("MODE CHANGE:", mode, "->", scheduledMode);
-    console.log("RESTARTING SERVER FOR ROUTE SWITCH");
-
-    process.exit(0);
-
-  }
-
-}
 scheduleEmailCheck();
 
-app.get("/day", (req, res) => {
-
-  console.log("FORCE DAY MODE");
-
-  openTime = 0;
-  closeTime = 24 * 60;
-  mode = getCurrentMode();
-
-  res.send("Forced DAY mode - restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
-});
-
-app.get("/night", (req, res) => {
-
-  console.log("FORCE NIGHT MODE");
-
-  openTime = 0;
-  closeTime = 0;
-  mode = getCurrentMode();
-
-  res.send("Forced NIGHT mode - restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
-});
-
-app.get("/auto", (req, res) => {
-
-  console.log("RETURNING TO AUTO SCHEDULE");
-
-  openTime = defaultOpenTime;
-  closeTime = defaultCloseTime;
-  mode = getCurrentMode();
-
-  res.send("Auto schedule restored - restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
-});
 
 app.get("/", (req, res) => {
-  res.send(`serverMode=${mode} | scheduleMode=${getCurrentMode()}`);
+  res.send(`mode=${getCurrentMode()}`);
 });
-
-setInterval(checkModeSwitch, 60000);
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
