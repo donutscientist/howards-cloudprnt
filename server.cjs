@@ -763,26 +763,33 @@ if (platform === "DD") {
 
   app.post("/starcloudprnt", (req, res) => {
 
-    const pollInterval = 5;
+  const pollInterval = 5;
 
-    if (pending.length > 0) {
-      const next = pending[0];
+  console.log("PRINTER POLL FROM:", req.ip);
 
-      return res.json({
-        jobReady: true,
-        mediaTypes: ["application/vnd.star.starprnt"],
-        jobToken: next,
-        contentType: "application/vnd.star.starprnt",
-        nextPollInterval: pollInterval
-      });
-    }
+  if (pending.length > 0) {
 
-    res.json({
-      jobReady: false,
+    const next = pending[0];
+
+    console.log("JOB READY ->", next);
+
+    return res.json({
+      jobReady: true,
+      mediaTypes: ["application/vnd.star.starprnt"],
+      jobToken: next,
+      contentType: "application/vnd.star.starprnt",
       nextPollInterval: pollInterval
     });
+  }
 
+  console.log("NO JOB - PRINTER IDLE");
+
+  res.json({
+    jobReady: false,
+    nextPollInterval: pollInterval
   });
+
+});
 
   app.get("/starcloudprnt", (req, res) => {
 
@@ -791,6 +798,8 @@ if (platform === "DD") {
     if (!token || !activeJobs.has(token)) {
       return res.status(204).send();
     }
+
+    console.log("PRINTER DOWNLOADING JOB:", token);
 
     const job = activeJobs.get(token);
 
@@ -817,7 +826,7 @@ function scheduleEmailCheck() {
   const currentMode = getCurrentMode();
 
   const interval = currentMode === "day"
-    ? 2000
+    ? 5000
     : 12 * 60 * 60 * 1000; // 12 hours
 
   console.log("EMAIL CHECK INTERVAL:", interval / 1000, "seconds");
