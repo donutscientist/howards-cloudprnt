@@ -174,23 +174,32 @@ let totalItems = "";
 let items = [];
 let current = null;
 
-    for (const line of lines) {
+    for (let idx = 0; idx < lines.length; idx++) {
+
+  const line = lines[idx];
 
       // PHONE
-      if (/\(\d{3}\)/.test(line)) {
-        phone = line;
+if (/\(\d{3}\)/.test(line)) {
+  phone = line;
+
+  // Look ahead for the "items" line after the phone
+  for (let i = idx + 1; i < lines.length; i++) {
+
+    if (/items/i.test(lines[i])) {
+
+      const match = lines[i].match(/^(\d+)/);
+
+      if (match) {
+        totalItems = match[1];
       }
 
-      // TOTAL ITEMS
-if (/total items/i.test(line)) {
+      break;
+    }
 
-  const prev = lines[lines.indexOf(line) + 1] || "";
-
-  const match = prev.match(/^(\d+)/);
-
-  if (match) totalItems = match[1];
-
+  }
 }
+
+    
 
 if (/subtotal|tax|total|\~ end/i.test(line)) continue;
 
@@ -199,14 +208,14 @@ if (/^\d+x/i.test(line)) {
   // look ahead until we hit "item"
   let valid = false;
 
-  for (let i = lines.indexOf(line) + 1; i < lines.length; i++) {
+  for (let i = idx + 1; i < lines.length; i++) {
 
     if (/^\d+x/i.test(lines[i])) {
       // another qty-x appeared first → fake item
       break;
     }
 
-    if (/^item$/i.test(lines[i])) {
+    if (/item$/i.test(lines[i])) {
       valid = true;
       break;
     }
