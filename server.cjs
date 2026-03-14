@@ -182,38 +182,40 @@ let current = null;
       }
 
       // TOTAL ITEMS
-if (/items$/i.test(line)) {
+if (/total items/i.test(line)) {
 
-  const match = line.match(/^(\d+)/);
+  const prev = lines[lines.indexOf(line) + 1] || "";
 
-  if (match) {
-    totalItems = match[1];
-  }
+  const match = prev.match(/^(\d+)/);
+
+  if (match) totalItems = match[1];
 
 }
-      // ITEM LINE
+
+if (/subtotal|tax|total|\~ end/i.test(line)) continue;
+
 if (/^\d+x/i.test(line)) {
 
-        // Ignore page break illusions
-        if (!/item/i.test(line)) continue;
+  // must end with "item"
+  if (!/item$/i.test(line)) continue;
 
-        let qty = line.match(/^(\d+)/)[1];
+  let qty = line.match(/^(\d+)/)[1];
 
-let name = line
-  .replace(/^\d+x/i,"")
-  .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
-  .replace(/\$\d+.*$/,"")
-  .replace(/item$/i,"")
-  .trim();
+  let name = line
+    .replace(/^\d+x/i,"")
+    .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
+    .replace(/\$\d+.*$/,"")
+    .replace(/item$/i,"")
+    .trim();
 
-        current = {
-          item: `${qty}x ${name}`,
-          modifiers: [],
-          category: /beverages/i.test(line) ? "Beverages" : ""
-        };
+  current = {
+    item: `${qty}x ${name}`,
+    modifiers: [],
+    category: /beverages/i.test(line) ? "Beverages" : ""
+  };
 
-        items.push(current);
-        continue;
+  items.push(current);
+  continue;
       }
 
       // MODIFIER
