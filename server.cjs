@@ -869,24 +869,39 @@ scheduleEmailCheck();
 
 
 app.get("/day", (req, res) => {
-  manualMode = "day";
+
+  process.env.FORCE_MODE = "day";
+
   console.log("MANUAL MODE -> DAY");
+
   res.send("Switching to DAY mode and restarting...");
+
   setTimeout(() => process.exit(0), 1000);
+
 });
 
 app.get("/night", (req, res) => {
-  manualMode = "night";
+
+  process.env.FORCE_MODE = "night";
+
   console.log("MANUAL MODE -> NIGHT");
+
   res.send("Switching to NIGHT mode and restarting...");
+
   setTimeout(() => process.exit(0), 1000);
+
 });
 
 app.get("/auto", (req, res) => {
-  manualMode = null;
+
+  process.env.FORCE_MODE = "";
+
   console.log("MANUAL MODE CLEARED -> AUTO");
+
   res.send("Returning to AUTO mode and restarting...");
+
   setTimeout(() => process.exit(0), 1000);
+
 });
 
 
