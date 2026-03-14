@@ -170,6 +170,7 @@ lines.forEach((l,i)=>console.log(i, l));
 
 let customer = "DoorDash";
 let phone = "";
+let totalItems = "";
 let items = [];
 let current = null;
 
@@ -181,25 +182,29 @@ let current = null;
       }
 
       // TOTAL ITEMS
-      if (/items$/i.test(line)) {
-        const match = line.match(/^(\d+)/);
-        if (match) totalItems = match[1];
-      }
+if (/items$/i.test(line)) {
 
+  const match = line.match(/^(\d+)/);
+
+  if (match) {
+    totalItems = match[1];
+  }
+
+}
       // ITEM LINE
-      if (/^\d+\s*x/i.test(line)) {
+if (/^\d+x/i.test(line)) {
 
         // Ignore page break illusions
         if (!/item/i.test(line)) continue;
 
         let qty = line.match(/^(\d+)/)[1];
 
-        let name = line
-          .replace(/^\d+\s*x/i,"")
-          .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
-          .replace(/\$\d+.*$/,"")
-          .replace(/item$/i,"")
-          .trim();
+let name = line
+  .replace(/^\d+x/i,"")
+  .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
+  .replace(/\$\d+.*$/,"")
+  .replace(/item$/i,"")
+  .trim();
 
         current = {
           item: `${qty}x ${name}`,
@@ -212,17 +217,24 @@ let current = null;
       }
 
       // MODIFIER
-      if (/^•/.test(line) && current) {
+if (/^•/.test(line) && current) {
 
         if (line.includes("**")) continue;
 
-        let mod = line.replace(/^•\s*/,"");
+let mod = line.replace(/^•\s*/,"").trim();
 
-        if (mod.includes(":")) {
-          mod = mod.split(":").slice(1).join(":").trim();
-        }
+// remove title before colon
+if (mod.includes(":")) {
+  mod = mod.split(":").slice(1).join(":").trim();
+}
 
-        if (mod) current.modifiers.push(mod);
+// remove price
+mod = mod.replace(/\(\+\s*\$[0-9.]+\)/g,"").trim();
+
+// remove extra spaces
+mod = mod.replace(/\s+/g," ").trim();
+
+if (mod) current.modifiers.push(mod);
       }
     }
 
