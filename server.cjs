@@ -4,9 +4,12 @@ const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 
 const app = express();
-let manualMode = null; // null = automatic schedule
-let mode = null;
+
+let openTime = 4 * 60 + 30; // 4:30 AM
+let closeTime = 17 * 60;    // 5:00 PM
+
 function isBusinessHours() {
+
   const now = new Date().toLocaleString("en-US", {
     timeZone: "America/Chicago",
     hour: "2-digit",
@@ -14,30 +17,27 @@ function isBusinessHours() {
     hour12: false
   });
 
-  const [h, m] = now.split(":").map(Number);
+  const [h,m] = now.split(":").map(Number);
   const time = h * 60 + m;
 
-  const open = 4 * 60 + 30;   // 4:30 AM
-  const close = 17 * 60;      // 5:00 PM
+  return time >= openTime && time <= closeTime;
 
-  return time >= open && time <= close;
 }
 
-function getCurrentMode() {
-
-  if (manualMode === "day") return "day";
-  if (manualMode === "night") return "night";
-
-  const forced = process.env.FORCE_MODE;
-
-  if (forced === "day") return "day";
-  if (forced === "night") return "night";
-
+function getCurrentMode(){
   return isBusinessHours() ? "day" : "night";
+}
+
+let mode = getCurrentMode();
+console.log("SERVER START MODE:", mode);
+
+function checkModeSwitch(){
+
+  const currentMode = getCurrentMode();
+
+  console.log("CURRENT MODE:", currentMode);
 
 }
-mode = getCurrentMode();
-console.log("SERVER START MODE:", mode);
 
 app.use(express.raw({ type: "*/*" }));
 
@@ -761,8 +761,6 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-if (mode === "day") {
-
   app.post("/starcloudprnt", (req, res) => {
 
     const pollInterval = 5;
@@ -806,15 +804,10 @@ if (mode === "day") {
 
   });
 
-}
-
-if (mode === "night") {
 
   app.get("/sleep", (req,res)=>{
     res.send("sleep mode");
   });
-
-}
 
 
 // --------------------
@@ -842,23 +835,12 @@ function scheduleEmailCheck() {
 
 function checkModeSwitch() {
 
-  const scheduledMode = isBusinessHours() ? "day" : "night";
-  const currentMode = getCurrentMode();
+  const scheduledMode = getCurrentMode();
 
-  // If manual override is active AND schedule time has arrived
-  if (manualMode && scheduledMode !== currentMode) {
-
-    console.log("SCHEDULE OVERRIDES MANUAL MODE");
-    manualMode = null;
-
-    process.exit(0);
-    return;
-  }
-
-  // Normal automatic switch
-  if (!manualMode && scheduledMode !== mode) {
+  if (scheduledMode !== mode) {
 
     console.log("MODE CHANGE:", mode, "->", scheduledMode);
+
     process.exit(0);
 
   }
@@ -867,43 +849,39 @@ function checkModeSwitch() {
 
 scheduleEmailCheck();
 
+app.get("/day", (req,res)=>{
 
-app.get("/day", (req, res) => {
+  console.log("FORCE DAY MODE");
 
-  process.env.FORCE_MODE = "day";
-
-  console.log("MANUAL MODE -> DAY");
-
-  res.send("Switching to DAY mode and restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
+  openTime = 0;
+  closeTime = 24*60;
+  mode = getCurrentMode();
+  res.send("Forced DAY mode");
 
 });
 
-app.get("/night", (req, res) => {
+app.get("/night", (req,res)=>{
 
-  process.env.FORCE_MODE = "night";
+  console.log("FORCE NIGHT MODE");
 
-  console.log("MANUAL MODE -> NIGHT");
-
-  res.send("Switching to NIGHT mode and restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
-
-});
-
-app.get("/auto", (req, res) => {
-
-  process.env.FORCE_MODE = "";
-
-  console.log("MANUAL MODE CLEARED -> AUTO");
-
-  res.send("Returning to AUTO mode and restarting...");
-
-  setTimeout(() => process.exit(0), 1000);
+  openTime = 0;
+  closeTime = 0;
+  mode = getCurrentMode();
+  res.send("Forced NIGHT mode");
 
 });
 
+
+app.get("/auto", (req,res)=>{
+
+  console.log("RETURNING TO AUTO SCHEDULE");
+
+  openTime = 4*60 + 30;
+  closeTime = 17*60;
+  mode = getCurrentMode();
+  res.send("Auto schedule restored");
+
+});
 
 app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
@@ -912,7 +890,7 @@ app.get("/restart", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send(`ok | mode=${getCurrentMode()} | manual=${manualMode || "auto"}`);
+  res.send(`ok | mode=${getCurrentMode()}`);
 });
 
 setInterval(checkModeSwitch, 60000);
