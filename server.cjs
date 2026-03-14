@@ -6,31 +6,6 @@ const pdfParse = require("pdf-parse");
 const app = express();
 app.use(express.raw({ type: "*/*" }));
 
-let defaultOpenTime = 4 * 60 + 30; // 4:30 AM
-let defaultCloseTime = 17 * 60;    // 5:00 PM
-
-let openTime = defaultOpenTime;
-let closeTime = defaultCloseTime;
-
-function isBusinessHours() {
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-
-  const [h, m] = now.split(":").map(Number);
-  const time = h * 60 + m;
-
-  return time >= openTime && time <= closeTime;
-}
-
-function getCurrentMode() {
-  return isBusinessHours() ? "day" : "night";
-}
-
-
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
 // --------------------
@@ -750,22 +725,42 @@ if (platform === "DD") {
 // --------------------
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
+function getBusinessInterval() {
+
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const [h, m] = now.split(':').map(Number);
+  const time = h * 60 + m;
+
+  const wakeStart = 4 * 60 + 30;   // 4:30 AM
+  const openStart = 5 * 60;        // 5:00 AM
+  const closeTime = 17 * 60;       // 5:00 PM
+
+  if ((time >= wakeStart && time < openStart) || 
+      (time >= openStart && time <= closeTime)) {
+    return 5;
+  }
+
+  return 18000; // 5 hours
+}
 
 app.post("/starcloudprnt", (req, res) => {
 
-  const isOpen = isBusinessHours();
+  const pollInterval = getBusinessInterval();
 
-  const pollInterval = isOpen
-    ? 5               // open hours
-    : 43200;          // 12 hours
+  console.log("POLL INTERVAL:", pollInterval);
 
-  if (!isOpen) {
-    return res.json({
-      jobReady: false,
-      nextPollInterval: pollInterval
-    });
+  // NIGHT MODE: tell printer to back off completely
+  if (pollInterval === 18000) {
+  console.log("NIGHT MODE - REJECT POLL");
+  return res.status(204).send();
   }
-
+  
   if (pending.length > 0) {
     const next = pending[0];
 
@@ -786,8 +781,10 @@ app.post("/starcloudprnt", (req, res) => {
 });
 
 app.get("/starcloudprnt", (req, res) => {
-
   const token = req.query.token || req.query.jobToken || req.query.jobid;
+
+  console.log("PRINTER REQUESTED:", token);
+  console.log("PENDING:", pending);
 
   if (!token || !activeJobs.has(token)) {
     return res.status(204).send();
@@ -798,44 +795,29 @@ app.get("/starcloudprnt", (req, res) => {
   res.setHeader("Content-Type", "application/vnd.star.starprnt");
   res.setHeader("Content-Length", job.length);
   res.setHeader("Cache-Control", "no-store");
-
   res.send(job);
 
   activeJobs.delete(token);
-  pending = pending.filter(t => t !== token);
+  pending = pending.filter((t) => t !== token);
 
+  console.log("PRINTED:", token);
 });
 
 // --------------------
 // LOOP
 // --------------------
 function scheduleEmailCheck() {
-  const currentMode = getCurrentMode();
 
-  const interval = currentMode === "day"
-    ? 2000
-    : 12 * 60 * 60 * 1000; // 12 hours
+  const interval = getBusinessInterval() * 1000;
 
-  console.log("EMAIL CHECK INTERVAL:", interval / 1000, "seconds");
+  console.log("EMAIL INTERVAL:", interval);
 
   setTimeout(async () => {
-    if (getCurrentMode() === "day") {
-      await checkEmail();
-    } else {
-      console.log("STORE CLOSED - email check skipped");
-    }
-
+    await checkEmail();
     scheduleEmailCheck();
   }, interval);
 }
-
 scheduleEmailCheck();
-
-
-app.get("/", (req, res) => {
-  res.send(`mode=${getCurrentMode()}`);
-});
-
 app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
+  console.log("Server running");
 });
