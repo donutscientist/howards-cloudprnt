@@ -4,6 +4,41 @@ const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
 
 const app = express();
+
+let openTime = 4 * 60 + 30; // 4:30 AM
+let closeTime = 17 * 60;    // 5:00 PM
+
+function isBusinessHours() {
+
+  const now = new Date().toLocaleString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const [h,m] = now.split(":").map(Number);
+  const time = h * 60 + m;
+
+  return time >= openTime && time <= closeTime;
+
+}
+
+function getCurrentMode(){
+  return isBusinessHours() ? "day" : "night";
+}
+
+let mode = getCurrentMode();
+console.log("SERVER START MODE:", mode);
+
+function checkModeSwitch(){
+
+  const currentMode = getCurrentMode();
+
+  console.log("CURRENT MODE:", currentMode);
+
+}
+
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
@@ -725,99 +760,141 @@ if (platform === "DD") {
 // --------------------
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
-function getBusinessInterval() {
 
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
+  app.post("/starcloudprnt", (req, res) => {
 
-  const [h, m] = now.split(':').map(Number);
-  const time = h * 60 + m;
+    const pollInterval = 5;
 
-  const wakeStart = 4 * 60 + 30;   // 4:30 AM
-  const openStart = 5 * 60;        // 5:00 AM
-  const closeTime = 17 * 60;       // 5:00 PM
+    if (pending.length > 0) {
+      const next = pending[0];
 
-  if ((time >= wakeStart && time < openStart) || 
-      (time >= openStart && time <= closeTime)) {
-    return 5;
-  }
+      return res.json({
+        jobReady: true,
+        mediaTypes: ["application/vnd.star.starprnt"],
+        jobToken: next,
+        contentType: "application/vnd.star.starprnt",
+        nextPollInterval: pollInterval
+      });
+    }
 
-  return 18000; // 5 hours
-}
-
-app.post("/starcloudprnt", (req, res) => {
-
-  const pollInterval = getBusinessInterval();
-
-  console.log("POLL INTERVAL:", pollInterval);
-
-  // NIGHT MODE: tell printer to back off completely
-  if (pollInterval === 18000) {
-  console.log("NIGHT MODE - REJECT POLL");
-  return res.status(204).send();
-  }
-  
-  if (pending.length > 0) {
-    const next = pending[0];
-
-    return res.json({
-      jobReady: true,
-      mediaTypes: ["application/vnd.star.starprnt"],
-      jobToken: next,
-      contentType: "application/vnd.star.starprnt",
+    res.json({
+      jobReady: false,
       nextPollInterval: pollInterval
     });
-  }
 
-  res.json({
-    jobReady: false,
-    nextPollInterval: pollInterval
   });
 
-});
+  app.get("/starcloudprnt", (req, res) => {
 
-app.get("/starcloudprnt", (req, res) => {
-  const token = req.query.token || req.query.jobToken || req.query.jobid;
+    const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-  console.log("PRINTER REQUESTED:", token);
-  console.log("PENDING:", pending);
+    if (!token || !activeJobs.has(token)) {
+      return res.status(204).send();
+    }
 
-  if (!token || !activeJobs.has(token)) {
-    return res.status(204).send();
-  }
+    const job = activeJobs.get(token);
 
-  const job = activeJobs.get(token);
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(job);
 
-  res.setHeader("Content-Type", "application/vnd.star.starprnt");
-  res.setHeader("Content-Length", job.length);
-  res.setHeader("Cache-Control", "no-store");
-  res.send(job);
+    activeJobs.delete(token);
+    pending = pending.filter((t) => t !== token);
 
-  activeJobs.delete(token);
-  pending = pending.filter((t) => t !== token);
+  });
 
-  console.log("PRINTED:", token);
-});
+
+  app.get("/sleep", (req,res)=>{
+    res.send("sleep mode");
+  });
+
 
 // --------------------
 // LOOP
 // --------------------
 function scheduleEmailCheck() {
+  const currentMode = getCurrentMode();
 
-  const interval = getBusinessInterval() * 1000;
+  const interval = currentMode === "day"
+    ? 2000
+    : 12 * 60 * 60 * 1000; // 12 hours
 
-  console.log("EMAIL INTERVAL:", interval);
+  console.log("EMAIL CHECK INTERVAL:", interval / 1000, "seconds");
 
   setTimeout(async () => {
-    await checkEmail();
+    if (getCurrentMode() === "day") {
+      await checkEmail();
+    } else {
+      console.log("STORE CLOSED - email check skipped");
+    }
+
     scheduleEmailCheck();
   }, interval);
 }
+
+function checkModeSwitch() {
+
+  const scheduledMode = getCurrentMode();
+
+  if (scheduledMode !== mode) {
+
+    console.log("MODE CHANGE:", mode, "->", scheduledMode);
+
+    process.exit(0);
+
+  }
+
+}
+
 scheduleEmailCheck();
+
+app.get("/day", (req,res)=>{
+
+  console.log("FORCE DAY MODE");
+
+  openTime = 0;
+  closeTime = 24*60;
+  mode = getCurrentMode();
+  res.send("Forced DAY mode");
+
+});
+
+app.get("/night", (req,res)=>{
+
+  console.log("FORCE NIGHT MODE");
+
+  openTime = 0;
+  closeTime = 0;
+  mode = getCurrentMode();
+  res.send("Forced NIGHT mode");
+
+});
+
+
+app.get("/auto", (req,res)=>{
+
+  console.log("RETURNING TO AUTO SCHEDULE");
+
+  openTime = 4*60 + 30;
+  closeTime = 17*60;
+  mode = getCurrentMode();
+  res.send("Auto schedule restored");
+
+});
+
+app.get("/restart", (req, res) => {
+  console.log("MANUAL RESTART TEST");
+  res.send("Restart test triggered...");
+  setTimeout(() => process.exit(0), 1000);
+});
+
+app.get("/", (req, res) => {
+  res.send(`ok | mode=${getCurrentMode()}`);
+});
+
+setInterval(checkModeSwitch, 60000);
+
 app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
+  console.log("SERVER RUNNING");
 });
