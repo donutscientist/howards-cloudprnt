@@ -155,92 +155,89 @@ async function parseDoorDashPDF(msg) {
     });
 
     const pdfBuffer = Buffer.from(
-  attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
-  "base64"
-);
+      attachment.data.data.replace(/-/g,"+").replace(/_/g,"/"),
+      "base64"
+    );
 
     const data = await pdfParse(pdfBuffer);
-
     const text = data.text || "";
 
-    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
-    let customer = "DoorDash";
-    let phone = "";
-    let items = [];
-    let current = null;
+// DEBUG
+console.log("DOORDASH RAW LINES:");
+lines.forEach((l,i)=>console.log(i, l));
+
+let customer = "DoorDash";
+let phone = "";
+let items = [];
+let current = null;
 
     for (const line of lines) {
 
+      // PHONE
       if (/\(\d{3}\)/.test(line)) {
         phone = line;
       }
 
+      // TOTAL ITEMS
+      if (/items$/i.test(line)) {
+        const match = line.match(/^(\d+)/);
+        if (match) totalItems = match[1];
+      }
+
+      // ITEM LINE
       if (/^\d+\s*x/i.test(line)) {
 
-  // STOP if we hit totals section
-  if (/total items|subtotal|tax/i.test(line.toLowerCase())) {
-    break;
-  }
+        // Ignore page break illusions
+        if (!/item/i.test(line)) continue;
 
-  const parts = line.split("x");
+        let qty = line.match(/^(\d+)/)[1];
 
-  const qty = parts[0].trim();
-  let name = parts.slice(1).join("x").trim();
+        let name = line
+          .replace(/^\d+\s*x/i,"")
+          .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
+          .replace(/\$\d+.*$/,"")
+          .replace(/item$/i,"")
+          .trim();
 
-  // remove category tail like "(in )Donuts"
-  name = name.replace(/\(in\s*\)\s*[A-Za-z\s]+$/i, "").trim();
+        current = {
+          item: `${qty}x ${name}`,
+          modifiers: [],
+          category: /beverages/i.test(line) ? "Beverages" : ""
+        };
 
-  current = {
-    item: `${qty}x ${name}`,
-    modifiers: []
-  };
+        items.push(current);
+        continue;
+      }
 
-  items.push(current);
-  continue;
-}
+      // MODIFIER
+      if (/^•/.test(line) && current) {
 
-      if (/^[•+]/.test(line) && current) {
+        if (line.includes("**")) continue;
 
-  // ❌ Skip garbage lines DoorDash sometimes adds
-  if (line.includes("*")) continue;
+        let mod = line.replace(/^•\s*/,"");
 
-  let mod = line.replace(/^[•+]\s*/, "").trim();
+        if (mod.includes(":")) {
+          mod = mod.split(":").slice(1).join(":").trim();
+        }
 
-  // remove trailing price like (+ $1.00)
-  mod = mod.replace(/\(\+\s*\$[0-9.]+\)/g, "").trim();
-
-  const words = mod.split(/\s+/);
-
-  let capCount = 0;
-  let startIndex = 0;
-
-  for (let i = 0; i < words.length; i++) {
-    if (/^[A-Z]/.test(words[i])) {
-      capCount++;
-
-      if (capCount === 2) {
-        startIndex = i;
-        break;
+        if (mod) current.modifiers.push(mod);
       }
     }
-  }
 
-  mod = words.slice(startIndex).join(" ").trim();
+    // SORT BEVERAGES FIRST
+    items.sort((a,b)=>{
+      if(a.category === "Beverages" && b.category !== "Beverages") return -1;
+      if(b.category === "Beverages" && a.category !== "Beverages") return 1;
+      return 0;
+    });
 
-  if (mod) current.modifiers.push(mod);
-}
-}
     return {
       customer,
       orderType: "DoorDash",
       phone,
-      totalItems: String(
-  items.reduce((sum, i) => {
-    const m = i.item.match(/^(\d+)x/);
-    return sum + (m ? parseInt(m[1]) : 1);
-  }, 0)
-),
+      totalItems,
       items,
       estimate: "",
       note: ""
@@ -250,7 +247,6 @@ async function parseDoorDashPDF(msg) {
     console.log("DOORDASH ERROR:", err.message);
     return null;
   }
-
 }
 
 // --------------------
