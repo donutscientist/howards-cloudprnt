@@ -785,6 +785,27 @@ app.post("/starcloudprnt", (req, res) => {
 
 });
 
+app.get("/starcloudprnt", (req, res) => {
+
+  const token = req.query.token || req.query.jobToken || req.query.jobid;
+
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
+  }
+
+  const job = activeJobs.get(token);
+
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
+  res.setHeader("Content-Length", job.length);
+  res.setHeader("Cache-Control", "no-store");
+
+  res.send(job);
+
+  activeJobs.delete(token);
+  pending = pending.filter(t => t !== token);
+
+});
+
 // --------------------
 // LOOP
 // --------------------
