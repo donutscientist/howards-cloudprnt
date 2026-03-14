@@ -765,7 +765,7 @@ if (platform === "DD") {
 
   const pollInterval = 5;
 
-  console.log("PRINTER POLL FROM:", req.ip);
+  console.log("PRINTER POLLING", pollInterval);
 
   if (pending.length > 0) {
 
@@ -782,8 +782,6 @@ if (platform === "DD") {
     });
   }
 
-  console.log("NO JOB - PRINTER IDLE");
-
   res.json({
     jobReady: false,
     nextPollInterval: pollInterval
@@ -799,7 +797,7 @@ if (platform === "DD") {
       return res.status(204).send();
     }
 
-    console.log("PRINTER DOWNLOADING JOB:", token);
+    console.log("DOWNLOADING JOB:", token);
 
     const job = activeJobs.get(token);
 
