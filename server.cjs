@@ -578,9 +578,16 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   }
 
   b.push(Buffer.from("\n"));
-  b.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
-  b.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
-  return Buffer.concat(b);
+
+// END OF ORDER LINE
+b.push(Buffer.from([0x1B, 0x45, 0x01])); // bold
+line("~ End of Order ~", "       ");
+b.push(Buffer.from([0x1B, 0x45, 0x00])); // bold off
+
+b.push(Buffer.from("\n"));
+b.push(Buffer.from([0x1B, 0x64, 0x03])); // feed 3
+b.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
+return Buffer.concat(b);
 }
 
   
