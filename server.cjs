@@ -229,7 +229,7 @@ for (let i = idx + 1; i < lines.length; i++) {
 
   let name = line
     .replace(/^\d+x/i,"")
-    .replace(/\(in\s*[A-Za-z\s]+\)/i,"")
+    .replace(/\(in\s*\)\s*[A-Za-z\s]+/i,"")
     .replace(/\$\d+.*$/,"")
     .replace(/item$/i,"")
     .trim();
