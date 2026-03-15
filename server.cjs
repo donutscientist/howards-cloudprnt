@@ -208,19 +208,20 @@ if (/^\d+x/i.test(line)) {
   // look ahead until we hit "item"
   let valid = false;
 
-  for (let i = idx + 1; i < lines.length; i++) {
+for (let i = idx + 1; i < lines.length; i++) {
 
-    if (/^\d+x/i.test(lines[i])) {
-      // another qty-x appeared first → fake item
-      break;
-    }
-
-    if (/item$/i.test(lines[i])) {
-      valid = true;
-      break;
-    }
-
+  // another item appears first → page break duplication
+  if (/^\d+x/i.test(lines[i])) {
+    break;
   }
+
+  // proper item ending
+  if (/item$/i.test(lines[i]) || /^\$/.test(lines[i])) {
+    valid = true;
+    break;
+  }
+
+}
 
   if (!valid) continue;
 
