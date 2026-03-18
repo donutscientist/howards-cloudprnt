@@ -867,32 +867,46 @@ if (platform === "DD") {
 // --------------------
 // LOOP
 // --------------------
-function getEmailInterval() {
-  return isBusinessHours()
-    ? 5000                 // 5 sec during open
-    : 12 * 60 * 60 * 1000; // 12 hrs during closed
+let emailTimer = null;
+
+function startEmailPolling() {
+
+  if (emailTimer) return; // prevent duplicates
+
+  console.log("EMAIL POLLING STARTED");
+
+  emailTimer = setInterval(async () => {
+    await checkEmail();
+  }, 5000); // always 5 sec while open
+console.log("EMAIL CHECK: 5 seconds");
+
 }
 
-function scheduleEmailCheck() {
+function stopEmailPolling() {
 
-  const interval = getEmailInterval();
+  if (emailTimer) {
+    clearInterval(emailTimer);
+    emailTimer = null;
+    console.log("EMAIL POLLING STOPPED");
+  }
 
-  console.log("EMAIL CHECK EVERY:", interval / 1000, "seconds");
-
-  setTimeout(async () => {
-
-    if (isBusinessHours()) {
-      await checkEmail();
-    } else {
-      console.log("STORE CLOSED - skipping email");
-    }
-
-    scheduleEmailCheck();
-
-  }, interval);
 }
 
-scheduleEmailCheck();
+// check every 30 sec to switch ON/OFF exactly
+setInterval(() => {
+
+  if (isBusinessHours()) {
+    startEmailPolling();
+  } else {
+    stopEmailPolling();
+  }
+
+}, 30000);
+
+// run once on startup
+if (isBusinessHours()) {
+  startEmailPolling();
+}
 
 
 app.get("/restart", (req, res) => {
