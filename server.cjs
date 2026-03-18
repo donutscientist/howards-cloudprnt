@@ -869,17 +869,20 @@ let emailTimer = null;
 
 function startEmailPolling() {
 
-  if (emailTimer) return; // prevent duplicates
+  if (emailTimer) return;
 
   console.log("EMAIL POLLING STARTED");
 
   emailTimer = setInterval(async () => {
 
-  console.log("EMAIL POLL: 5 sec");
+    console.log("EMAIL POLL: 5 sec");
 
-  await checkEmail();
+    await checkEmail();
 
-}, 5000);
+  }, 5000);
+
+} // ✅ THIS WAS MISSING
+
 
 function stopEmailPolling() {
 
