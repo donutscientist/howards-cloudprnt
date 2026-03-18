@@ -541,7 +541,10 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
   const line = (txt, indent = "") => b.push(Buffer.from(cut32(txt, indent) + "\n", "ascii"));
 
   // Header (ALL CUT TO 32)
+  b.push(Buffer.from([0x1B, 0x2D, 0x01])); // underline
   b.push(Buffer.from([0x1B, 0x45, 0x01])); line(customer, "   ");  b.push(Buffer.from([0x1B, 0x45, 0x00]));
+  b.push(Buffer.from([0x1B, 0x2D, 0x00])); // underline
+  b.push(Buffer.from([0x1B, 0x45, 0x01])); line("---------------");  b.push(Buffer.from([0x1B, 0x45, 0x00]));
   b.push(Buffer.from([0x1B, 0x45, 0x01])); line(orderType, "   "); b.push(Buffer.from([0x1B, 0x45, 0x00]));
 
   if (phone) {
@@ -581,7 +584,7 @@ function buildReceipt(customer, orderType, phone, totalItems, items, estimate = 
 
 // END OF ORDER LINE
 b.push(Buffer.from([0x1B, 0x45, 0x01])); // bold
-line("~ End of Order ~", "       ");
+line("- End of Order -", "       ");
 b.push(Buffer.from([0x1B, 0x45, 0x00])); // bold off
 
 b.push(Buffer.from("\n"));
