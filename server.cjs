@@ -28,16 +28,6 @@ function getCurrentMode(){
   return isBusinessHours() ? "day" : "night";
 }
 
-let mode = getCurrentMode();
-console.log("SERVER START MODE:", mode);
-
-function checkModeSwitch(){
-
-  const currentMode = getCurrentMode();
-
-  console.log("CURRENT MODE:", currentMode);
-
-}
 
 app.use(express.raw({ type: "*/*" }));
 
@@ -809,9 +799,20 @@ if (platform === "DD") {
 
   app.post("/starcloudprnt", (req, res) => {
 
-  const pollInterval = 5;
+  const isOpen = isBusinessHours();
 
-  console.log("PRINTER POLLING:", pollInterval, "seconds");
+  const pollInterval = isOpen
+    ? 5
+    : 43200; // 12 hours
+
+  console.log("PRINTER POLL:", pollInterval, "sec");
+
+  if (!isOpen) {
+    return res.json({
+      jobReady: false,
+      nextPollInterval: pollInterval
+    });
+  }
 
   if (pending.length > 0) {
 
@@ -866,87 +867,39 @@ if (platform === "DD") {
 // --------------------
 // LOOP
 // --------------------
+function getEmailInterval() {
+  return isBusinessHours()
+    ? 5000                 // 5 sec during open
+    : 12 * 60 * 60 * 1000; // 12 hrs during closed
+}
+
 function scheduleEmailCheck() {
-  const currentMode = getCurrentMode();
 
-  const interval = currentMode === "day"
-    ? 5000
-    : 12 * 60 * 60 * 1000; // 12 hours
+  const interval = getEmailInterval();
 
-  console.log("EMAIL CHECKING:", interval / 1000, "seconds");
+  console.log("EMAIL CHECK EVERY:", interval / 1000, "seconds");
 
   setTimeout(async () => {
-    if (getCurrentMode() === "day") {
+
+    if (isBusinessHours()) {
       await checkEmail();
     } else {
-      console.log("STORE CLOSED - email check skipped");
+      console.log("STORE CLOSED - skipping email");
     }
 
     scheduleEmailCheck();
+
   }, interval);
-}
-
-function checkModeSwitch() {
-
-  const scheduledMode = getCurrentMode();
-
-  if (scheduledMode !== mode) {
-
-    console.log("MODE CHANGE:", mode, "->", scheduledMode);
-
-    process.exit(0);
-
-  }
-
 }
 
 scheduleEmailCheck();
 
-app.get("/day", (req,res)=>{
-
-  console.log("FORCE DAY MODE");
-
-  openTime = 0;
-  closeTime = 24*60;
-  mode = getCurrentMode();
-  res.send("Forced DAY mode");
-
-});
-
-app.get("/night", (req,res)=>{
-
-  console.log("FORCE NIGHT MODE");
-
-  openTime = 0;
-  closeTime = 0;
-  mode = getCurrentMode();
-  res.send("Forced NIGHT mode");
-
-});
-
-
-app.get("/auto", (req,res)=>{
-
-  console.log("RETURNING TO AUTO SCHEDULE");
-
-  openTime = 4*60 + 30;
-  closeTime = 17*60;
-  mode = getCurrentMode();
-  res.send("Auto schedule restored");
-
-});
 
 app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
   res.send("Restart test triggered...");
   setTimeout(() => process.exit(0), 1000);
 });
-
-app.get("/", (req, res) => {
-  res.send(`ok | mode=${getCurrentMode()}`);
-});
-
-setInterval(checkModeSwitch, 60000);
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
