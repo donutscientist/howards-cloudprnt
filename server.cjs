@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+const UBER_SECRET = "howards-ubereats-secret-123"; // SAME as webhook
 const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
@@ -915,6 +917,33 @@ app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
   res.send("Restart test triggered...");
   setTimeout(() => process.exit(0), 1000);
+});
+
+app.post("/ubereats", express.json(), (req, res) => {
+
+  console.log("📦 UBER RAW RECEIVED");
+
+  const signature = req.headers["x-uber-signature"];
+
+  const expected = crypto
+    .createHmac("sha256", UBER_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest("hex");
+
+  if (signature !== expected) {
+    console.log("❌ INVALID SIGNATURE");
+    return res.sendStatus(401);
+  }
+
+  console.log("✅ UBER VERIFIED");
+
+  const order = req.body;
+
+  console.log(JSON.stringify(order, null, 2));
+
+  // TEMP: just respond first
+  res.sendStatus(200);
+
 });
 
 app.listen(process.env.PORT || 3000, () => {
