@@ -749,7 +749,6 @@ if (platform === "DD") {
     ? 5
     : 43200; // 12 hours
 
-  console.log("PRINTER POLL:", pollInterval, "sec");
 
   if (!isOpen) {
     return res.json({
