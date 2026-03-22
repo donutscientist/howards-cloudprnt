@@ -26,11 +26,6 @@ function isBusinessHours() {
 
 }
 
-function getCurrentMode(){
-  return isBusinessHours() ? "day" : "night";
-}
-
-
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
@@ -62,21 +57,6 @@ function decodeBase64Url(data) {
       .padEnd(data.length + (4 - (data.length % 4)) % 4, "="),
     "base64"
   ).toString("utf8");
-}
-
-// Gmail message parts often contain quoted-printable text (with =20, soft wraps "=\n")
-function decodeQuotedPrintable(input) {
-  if (!input) return "";
-
-  // Remove soft line breaks
-  let s = input.replace(/=\r?\n/g, "");
-
-  // Convert =XX hex escapes
-  s = s.replace(/=([A-Fa-f0-9]{2})/g, (_, hex) =>
-    String.fromCharCode(parseInt(hex, 16))
-  );
-
-  return s;
 }
 
 // --------------------
@@ -583,42 +563,6 @@ b.push(Buffer.from([0x1D, 0x56, 0x00])); // cut
 return Buffer.concat(b);
 }
 
-  
-function getSquarePlain(payload){
-
-  function walk(part){
-
-    if(!part) return "";
-
-    if(part.mimeType === "text/plain" && part.body?.data){
-
-      let raw = Buffer
-        .from(part.body.data,"base64")
-        .toString("utf8");
-
-      // REMOVE SOFT WRAPS
-      raw = raw.replace(/=\r?\n/g,"");
-
-      // DECODE =20 etc
-      raw = raw.replace(/=([A-Fa-f0-9]{2})/g,
-        (_,hex)=>String.fromCharCode(parseInt(hex,16))
-      );
-
-      return raw;
-    }
-
-    if(part.parts){
-      for(const p of part.parts){
-        const r = walk(p);
-        if(r) return r;
-      }
-    }
-
-    return "";
-  }
-
-  return walk(payload);
-}
 // --------------------
 // CHECK EMAIL (GH + SQ)
 // --------------------
@@ -859,9 +803,9 @@ if (platform === "DD") {
   });
 
 
-  app.get("/sleep", (req,res)=>{
-    res.send("sleep mode");
-  });
+  app.get("/", (req,res)=>{
+  res.send("OK");
+});
 
 
 // --------------------
@@ -877,7 +821,8 @@ function startEmailPolling() {
 
   emailTimer = setInterval(async () => {
 
-    console.log("EMAIL POLL: 5 sec");
+    // only log important events
+// remove repetitive logs
 
     await checkEmail();
 
@@ -911,7 +856,12 @@ setInterval(() => {
 if (isBusinessHours()) {
   startEmailPolling();
 }
-
+setInterval(() => {
+  if (pending.length > 50) {
+    console.log("🧹 CLEANING QUEUE");
+    pending = pending.slice(-20);
+  }
+}, 60000);
 
 app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
@@ -919,7 +869,7 @@ app.get("/restart", (req, res) => {
   setTimeout(() => process.exit(0), 1000);
 });
 
-app.post("/ubereats", express.json(), (req, res) => {
+app.post("/ubereats", (req, res) => {
 
   console.log("📦 UBER RAW RECEIVED");
 
@@ -927,7 +877,7 @@ app.post("/ubereats", express.json(), (req, res) => {
 
   const expected = crypto
     .createHmac("sha256", UBER_SECRET)
-    .update(JSON.stringify(req.body))
+    .update(req.body)
     .digest("hex");
 
   if (signature !== expected) {
@@ -937,13 +887,22 @@ app.post("/ubereats", express.json(), (req, res) => {
 
   console.log("✅ UBER VERIFIED");
 
-  const order = req.body;
+  let order;
+
+  try {
+    order = JSON.parse(req.body.toString());
+  } catch (e) {
+    console.log("❌ JSON PARSE ERROR");
+    return res.sendStatus(400);
+  }
 
   console.log(JSON.stringify(order, null, 2));
 
-  // TEMP: just respond first
   res.sendStatus(200);
+});
 
+app.get("/ubereats", (req, res) => {
+  res.send("Uber webhook live");
 });
 
 app.listen(process.env.PORT || 3000, () => {
