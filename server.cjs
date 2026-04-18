@@ -749,6 +749,7 @@ if (platform === "DD") {
     ? 5
     : 43200; // 12 hours
 
+console.log("PRINTER POLL:", pollInterval, "sec");
 
   if (!isOpen) {
     return res.json({
@@ -822,6 +823,8 @@ function startEmailPolling() {
 
     // only log important events
 // remove repetitive logs
+console.log("EMAIL POLL: 5 sec");
+
 
     await checkEmail();
 
