@@ -34,6 +34,12 @@ app.use(express.raw({ type: "*/*" }));
 let activeJobs = new Map(); // token -> Buffer
 let pending = [];           // tokens FIFO
 
+let lastEmailPollAt = Date.now();
+let lastPrinterPollAt = Date.now();
+
+let emailStoppedLogged = false;
+let printerStoppedLogged = false;
+
 // --------------------
 // GMAIL AUTH
 // --------------------
@@ -568,6 +574,15 @@ return Buffer.concat(b);
 // --------------------
 async function checkEmail() {
   try {
+    
+    if (emailStoppedLogged) {
+  console.log("Email polling resumes");
+}
+
+lastEmailPollAt = Date.now();
+emailStoppedLogged = false;
+
+
     const gh = await gmail.users.messages.list({
       userId: "me",
       q: "is:unread label:GH_PRINT",
@@ -743,13 +758,18 @@ if (platform === "DD") {
 
   app.post("/starcloudprnt", (req, res) => {
 
+  if (printerStoppedLogged) {
+  console.log("Printer polling resumes");
+}
+
+lastPrinterPollAt = Date.now();
+printerStoppedLogged = false;
+
   const isOpen = isBusinessHours();
 
   const pollInterval = isOpen
     ? 5
     : 43200; // 12 hours
-
-console.log("PRINTER POLL:", pollInterval, "sec");
 
   if (!isOpen) {
     return res.json({
@@ -813,36 +833,6 @@ console.log("PRINTER POLL:", pollInterval, "sec");
 // --------------------
 let emailTimer = null;
 
-function startEmailPolling() {
-
-  if (emailTimer) return;
-
-  console.log("EMAIL POLLING STARTED");
-
-  emailTimer = setInterval(async () => {
-
-    // only log important events
-// remove repetitive logs
-console.log("EMAIL POLL: 5 sec");
-
-
-    await checkEmail();
-
-  }, 5000);
-
-} // ✅ THIS WAS MISSING
-
-
-function stopEmailPolling() {
-
-  if (emailTimer) {
-    clearInterval(emailTimer);
-    emailTimer = null;
-    console.log("EMAIL POLLING STOPPED");
-  }
-
-}
-
 // check every 30 sec to switch ON/OFF exactly
 setInterval(() => {
 
@@ -864,6 +854,20 @@ setInterval(() => {
     pending = pending.slice(-20);
   }
 }, 60000);
+
+setInterval(() => {
+  const now = Date.now();
+
+  if (!emailStoppedLogged && now - lastEmailPollAt > 5 * 60 * 1000) {
+    console.log("email has stopped polling 5 minutes ago");
+    emailStoppedLogged = true;
+  }
+
+  if (!printerStoppedLogged && now - lastPrinterPollAt > 5 * 60 * 1000) {
+    console.log("printer has stopped polling 5 minutes ago");
+    printerStoppedLogged = true;
+  }
+}, 30000);
 
 app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
