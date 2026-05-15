@@ -902,6 +902,9 @@ app.get("/restart", (req, res) => {
 app.post("/ubereats", (req, res) => {
 
   console.log("📦 UBER RAW RECEIVED");
+  
+  console.log("HEADERS:", req.headers);
+console.log("BODY:", req.body.toString());
 
   const signature = req.headers["x-uber-signature"];
 
