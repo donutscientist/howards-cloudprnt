@@ -833,6 +833,30 @@ printerStoppedLogged = false;
 // --------------------
 let emailTimer = null;
 
+function startEmailPolling() {
+  if (emailTimer) return;
+
+  if (emailStoppedLogged) {
+    console.log("Email polling resumes");
+  }
+
+  lastEmailPollAt = Date.now();
+  emailStoppedLogged = false;
+
+  emailTimer = setInterval(async () => {
+    lastEmailPollAt = Date.now();
+    emailStoppedLogged = false;
+    await checkEmail();
+  }, 5000);
+}
+
+function stopEmailPolling() {
+  if (emailTimer) {
+    clearInterval(emailTimer);
+    emailTimer = null;
+  }
+}
+
 // check every 30 sec to switch ON/OFF exactly
 setInterval(() => {
 
