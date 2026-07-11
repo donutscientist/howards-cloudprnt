@@ -769,7 +769,7 @@ printerStoppedLogged = false;
 
   const pollInterval = isOpen
     ? 5
-    : 43200; // 12 hours
+    : 300; // 12 hours
 
   if (!isOpen) {
     return res.json({
