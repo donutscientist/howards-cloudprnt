@@ -937,7 +937,67 @@ console.log("BODY:", req.body.toString());
 app.get("/ubereats", (req, res) => {
   res.send("Uber webhook live");
 });
+// --------------------
 
+// CLEAR ALL UNPRINTED JOBS
+
+// Open:
+
+// https://YOUR-RENDER-URL.onrender.com/clear-jobs?key=howards-clear-123
+
+// --------------------
+
+app.get("/clear-jobs", (req, res) => {
+
+  const CLEAR_KEY = "howards-clear-123";
+
+  if (req.query.key !== CLEAR_KEY) {
+
+    return res.status(401).send("Unauthorized");
+
+  }
+
+  const pendingCount = pending.length;
+
+  const activeCount = activeJobs.size;
+
+  pending = [];
+
+  activeJobs.clear();
+
+  console.log(
+
+    `ALL PRINT JOBS CLEARED: ${pendingCount} pending, ${activeCount} active`
+
+  );
+
+  res.send(`
+
+    <html>
+
+      <body style="
+
+        font-family: Arial;
+
+        text-align: center;
+
+        padding-top: 80px;
+
+      ">
+
+        <h1>Print Jobs Cleared</h1>
+
+        <p>${pendingCount} pending jobs removed.</p>
+
+        <p>${activeCount} active jobs removed.</p>
+
+      </body>
+
+    </html>
+
+  `);
+
+});
 app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
 });
