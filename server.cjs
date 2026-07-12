@@ -1,5 +1,4 @@
 const crypto = require("crypto");
-const UBER_SECRET = "howards-ubereats-secret-123"; // SAME as webhook
 const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
@@ -7,13 +6,22 @@ const pdfParse = require("pdf-parse");
 
 const app = express();
 
-let openTime = 4 * 60 + 30; // 4:30 AM
-let closeTime = 17 * 60;    // 5:00 PM
+const TIME_ZONE = process.env.TIME_ZONE || "America/Chicago";
+const UBER_SECRET = process.env.UBER_SECRET || "";
+const CLEAR_JOBS_KEY = process.env.CLEAR_JOBS_KEY || "";
+const PORT = process.env.PORT || 3000;
+const EMAIL_POLL_INTERVAL_MS = 5000;
+const POLLING_WATCHDOG_MS = 5 * 60 * 1000;
+const OPEN_POLL_INTERVAL_SECONDS = 5;
+const CLOSED_POLL_INTERVAL_SECONDS = 300;
+
+const openTime = Number(process.env.OPEN_TIME_MINUTES || 4 * 60 + 30); // 4:30 AM
+const closeTime = Number(process.env.CLOSE_TIME_MINUTES || 17 * 60); // 5:00 PM
 
 function isBusinessHours() {
 
   const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: TIME_ZONE,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
@@ -756,20 +764,26 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-  app.post("/starcloudprnt", (req, res) => {
+const CLOUDPRNT_PATHS = [
+  "/starcloudprnt",
+  "/StarCloudPRNT",
+  "/cloudprnt",
+  "/CloudPRNT"
+];
 
+function handleCloudPrntPoll(req, res) {
   if (printerStoppedLogged) {
-  console.log("Printer polling resumes");
-}
+    console.log("Printer polling resumes");
+  }
 
-lastPrinterPollAt = Date.now();
-printerStoppedLogged = false;
+  lastPrinterPollAt = Date.now();
+  printerStoppedLogged = false;
 
   const isOpen = isBusinessHours();
 
   const pollInterval = isOpen
-    ? 5
-    : 300; // 12 hours
+    ? OPEN_POLL_INTERVAL_SECONDS
+    : CLOSED_POLL_INTERVAL_SECONDS;
 
   if (!isOpen) {
     return res.json({
@@ -797,34 +811,44 @@ printerStoppedLogged = false;
     jobReady: false,
     nextPollInterval: pollInterval
   });
+}
 
-});
+function handleCloudPrntJobDownload(req, res) {
+  const token = req.query.token || req.query.jobToken || req.query.jobid || req.query.jobId;
 
-  app.get("/starcloudprnt", (req, res) => {
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
+  }
 
-    const token = req.query.token || req.query.jobToken || req.query.jobid;
+  console.log("DOWNLOADING JOB:", token);
 
-    if (!token || !activeJobs.has(token)) {
-      return res.status(204).send();
-    }
+  const job = activeJobs.get(token);
 
-    console.log("DOWNLOADING JOB:", token);
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
+  res.setHeader("Content-Length", job.length);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(job);
 
-    const job = activeJobs.get(token);
+  activeJobs.delete(token);
+  pending = pending.filter((t) => t !== token);
+}
 
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control", "no-store");
-    res.send(job);
-
-    activeJobs.delete(token);
-    pending = pending.filter((t) => t !== token);
-
-  });
+app.post(CLOUDPRNT_PATHS, handleCloudPrntPoll);
+app.get(CLOUDPRNT_PATHS, handleCloudPrntJobDownload);
+app.post("/", handleCloudPrntPoll);
 
 
   app.get("/", (req,res)=>{
-  res.send("OK");
+  if (req.query.token || req.query.jobToken || req.query.jobid || req.query.jobId) {
+    return handleCloudPrntJobDownload(req, res);
+  }
+
+  res.json({
+    ok: true,
+    cloudPrntPaths: CLOUDPRNT_PATHS,
+    pendingJobs: pending.length,
+    businessHours: isBusinessHours()
+  });
 });
 
 
@@ -847,7 +871,7 @@ function startEmailPolling() {
     lastEmailPollAt = Date.now();
     emailStoppedLogged = false;
     await checkEmail();
-  }, 5000);
+  }, EMAIL_POLL_INTERVAL_MS);
 }
 
 function stopEmailPolling() {
@@ -882,12 +906,12 @@ setInterval(() => {
 setInterval(() => {
   const now = Date.now();
 
-  if (!emailStoppedLogged && now - lastEmailPollAt > 5 * 60 * 1000) {
+  if (!emailStoppedLogged && now - lastEmailPollAt > POLLING_WATCHDOG_MS) {
     console.log("email has stopped polling 5 minutes ago");
     emailStoppedLogged = true;
   }
 
-  if (!printerStoppedLogged && now - lastPrinterPollAt > 5 * 60 * 1000) {
+  if (!printerStoppedLogged && now - lastPrinterPollAt > POLLING_WATCHDOG_MS) {
     console.log("printer has stopped polling 5 minutes ago");
     printerStoppedLogged = true;
   }
@@ -902,6 +926,11 @@ app.get("/restart", (req, res) => {
 app.post("/ubereats", (req, res) => {
 
   console.log("📦 UBER RAW RECEIVED");
+
+  if (!UBER_SECRET) {
+    console.log("❌ UBER_SECRET is not configured");
+    return res.sendStatus(503);
+  }
   
   console.log("HEADERS:", req.headers);
 console.log("BODY:", req.body.toString());
@@ -940,7 +969,12 @@ app.get("/ubereats", (req, res) => {
 });
 
 app.get("/clear-jobs", (req, res) => {
-  if (req.query.key !== "howards-clear-123") {
+  if (!CLEAR_JOBS_KEY) {
+    console.log("CLEAR_JOBS_KEY is not configured");
+    return res.status(503).send("Clear jobs endpoint is not configured.");
+  }
+
+  if (req.query.key !== CLEAR_JOBS_KEY) {
     return res.status(401).send("Unauthorized");
   }
 
@@ -953,6 +987,6 @@ app.get("/clear-jobs", (req, res) => {
 
   return res.send(`Success: ${count} unprinted jobs cleared.`);
 });
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
+app.listen(PORT, () => {
+  console.log(`SERVER RUNNING on port ${PORT}`);
 });

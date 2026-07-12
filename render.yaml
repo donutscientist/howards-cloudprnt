@@ -4,7 +4,17 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install
-    startCommand: node server.js
+    startCommand: node server.cjs
     envVars:
       - key: NODE_VERSION
         value: 18
+      - key: TIME_ZONE
+        value: America/Chicago
+      - key: OPEN_TIME_MINUTES
+        value: 270
+      - key: CLOSE_TIME_MINUTES
+        value: 1020
+      - key: UBER_SECRET
+        sync: false
+      - key: CLEAR_JOBS_KEY
+        sync: false
