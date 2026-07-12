@@ -766,7 +766,9 @@ if (platform === "DD") {
 
 const CLOUDPRNT_PATHS = [
   "/starcloudprnt",
+  "/starcloudprint",
   "/StarCloudPRNT",
+  "/StarCloudPRINT",
   "/cloudprnt",
   "/CloudPRNT"
 ];
