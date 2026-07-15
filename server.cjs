@@ -1,16 +1,5 @@
 const crypto = require("crypto");
-const UBER_SECRET = process.env.UBER_SECRET || "howards-ubereats-secret-123"; // SAME as webhook
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
-const PORT = Number(process.env.PORT || 3000);
-const EMAIL_POLL_MS = Number(process.env.EMAIL_POLL_MS || 5000);
-const BUSINESS_TZ = process.env.BUSINESS_TZ || "America/Chicago";
-const OPEN_TIME = process.env.OPEN_TIME || "04:30";
-const CLOSE_TIME = process.env.CLOSE_TIME || "17:00";
-const OPEN_PRINTER_POLL_SECONDS = Number(process.env.OPEN_PRINTER_POLL_SECONDS || 5);
-const CLOSED_PRINTER_POLL_SECONDS =
-  Number(process.env.CLOSED_PRINTER_POLL_SECONDS || 300);
-const MAX_QUEUE_DEPTH = Number(process.env.MAX_QUEUE_DEPTH || 50);
-const TRIM_QUEUE_TO = Number(process.env.TRIM_QUEUE_TO || 20);
+const UBER_SECRET = "howards-ubereats-secret-123"; // SAME as webhook
 const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
@@ -18,24 +7,13 @@ const pdfParse = require("pdf-parse");
 
 const app = express();
 
-function parseTimeToMinutes(value, fallback) {
-  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return fallback;
-
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return fallback;
-
-  return hours * 60 + minutes;
-}
-
-let openTime = parseTimeToMinutes(OPEN_TIME, 4 * 60 + 30); // 4:30 AM
-let closeTime = parseTimeToMinutes(CLOSE_TIME, 17 * 60);    // 5:00 PM
+let openTime = 4 * 60 + 30; // 4:30 AM
+let closeTime = 17 * 60;    // 5:00 PM
 
 function isBusinessHours() {
 
   const now = new Date().toLocaleString("en-US", {
-    timeZone: BUSINESS_TZ,
+    timeZone: "America/Chicago",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
@@ -55,7 +33,6 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 let activeJobs = new Map(); // token -> Buffer
 let pending = [];           // tokens FIFO
-let completedJobs = new Set(); // recently completed/cleared tokens
 
 let lastEmailPollAt = Date.now();
 let lastPrinterPollAt = Date.now();
@@ -779,21 +756,20 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-app.post("/starcloudprint", (req, res) => {
-  console.log("PRINTER POLLED:", new Date().toISOString());
+  app.post("/starcloudprnt", (req, res) => {
 
   if (printerStoppedLogged) {
-    console.log("Printer polling resumes");
-  }
+  console.log("Printer polling resumes");
+}
 
-  lastPrinterPollAt = Date.now();
-  printerStoppedLogged = false;
+lastPrinterPollAt = Date.now();
+printerStoppedLogged = false;
 
   const isOpen = isBusinessHours();
 
   const pollInterval = isOpen
-    ? OPEN_PRINTER_POLL_SECONDS
-    : CLOSED_PRINTER_POLL_SECONDS;
+    ? 5
+    : 43200; // 12 hours
 
   if (!isOpen) {
     return res.json({
@@ -803,6 +779,7 @@ app.post("/starcloudprint", (req, res) => {
   }
 
   if (pending.length > 0) {
+
     const next = pending[0];
 
     console.log("JOB READY ->", next);
@@ -816,69 +793,38 @@ app.post("/starcloudprint", (req, res) => {
     });
   }
 
-  return res.json({
+  res.json({
     jobReady: false,
     nextPollInterval: pollInterval
   });
+
 });
 
-app.get("/starcloudprint", (req, res) => {
-  const token = req.query.token || req.query.jobToken || req.query.jobid;
+  app.get("/starcloudprnt", (req, res) => {
 
-  if (!token) {
-    return res.status(200).send("CloudPRNT endpoint is live. Printer polling uses POST.");
-  }
+    const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-  if (!activeJobs.has(token)) {
-    return res.status(completedJobs.has(token) ? 410 : 204).send();
-  }
+    if (!token || !activeJobs.has(token)) {
+      return res.status(204).send();
+    }
 
-  console.log("DOWNLOADING JOB:", token);
+    console.log("DOWNLOADING JOB:", token);
 
-  const job = activeJobs.get(token);
+    const job = activeJobs.get(token);
 
-  res.setHeader("Content-Type", "application/vnd.star.starprnt");
-  res.setHeader("Content-Length", job.length);
-  res.setHeader("Cache-Control", "no-store");
-  res.send(job);
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(job);
 
-  activeJobs.delete(token);
-  pending = pending.filter((t) => t !== token);
-  completedJobs.add(token);
-  setTimeout(() => completedJobs.delete(token), 10 * 60 * 1000).unref?.();
-});
+    activeJobs.delete(token);
+    pending = pending.filter((t) => t !== token);
+
+  });
+
 
   app.get("/", (req,res)=>{
   res.send("OK");
-});
-
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    queueDepth: pending.length,
-    activeJobs: activeJobs.size,
-    businessHours: isBusinessHours(),
-    lastEmailPollAt,
-    lastPrinterPollAt
-  });
-});
-
-function requireAdmin(req, res, next) {
-  if (!ADMIN_TOKEN) return res.status(404).send("Not found");
-
-  const header = req.get("authorization") || "";
-  const token = header.replace(/^Bearer\s+/i, "") || req.query.token;
-  if (token !== ADMIN_TOKEN) return res.status(401).send("Unauthorized");
-
-  next();
-}
-
-app.post("/admin/clear-jobs", requireAdmin, (req, res) => {
-  const cleared = activeJobs.size;
-  for (const token of activeJobs.keys()) completedJobs.add(token);
-  activeJobs.clear();
-  pending = [];
-  res.json({ ok: true, cleared });
 });
 
 
@@ -901,7 +847,7 @@ function startEmailPolling() {
     lastEmailPollAt = Date.now();
     emailStoppedLogged = false;
     await checkEmail();
-  }, EMAIL_POLL_MS);
+  }, 5000);
 }
 
 function stopEmailPolling() {
@@ -927,16 +873,9 @@ if (isBusinessHours()) {
   startEmailPolling();
 }
 setInterval(() => {
-  if (pending.length > MAX_QUEUE_DEPTH) {
+  if (pending.length > 50) {
     console.log("🧹 CLEANING QUEUE");
-    const keep = new Set(pending.slice(-TRIM_QUEUE_TO));
-    for (const token of pending) {
-      if (!keep.has(token)) {
-        activeJobs.delete(token);
-        completedJobs.add(token);
-      }
-    }
-    pending = pending.slice(-TRIM_QUEUE_TO);
+    pending = pending.slice(-20);
   }
 }, 60000);
 
@@ -954,51 +893,12 @@ setInterval(() => {
   }
 }, 30000);
 
-app.get("/restart", requireAdmin, (req, res) => {
+app.get("/restart", (req, res) => {
   console.log("MANUAL RESTART TEST");
   res.send("Restart test triggered...");
   setTimeout(() => process.exit(0), 1000);
 });
 
-app.post("/ubereats", (req, res) => {
-
-  console.log("📦 UBER RAW RECEIVED");
-  
-  console.log("HEADERS:", req.headers);
-console.log("BODY:", req.body.toString());
-
-    const signature = req.headers["x-uber-signature"];
-
-  const expected = crypto
-    .createHmac("sha256", UBER_SECRET)
-    .update(req.body)
-    .digest("hex");
-
-  if (signature !== expected) {
-    console.log("❌ INVALID SIGNATURE");
-    return res.sendStatus(401);
-  }
-
-  console.log("✅ UBER VERIFIED");
-
-  let order;
-
-  try {
-    order = JSON.parse(req.body.toString());
-  } catch (e) {
-    console.log("❌ JSON PARSE ERROR");
-    return res.sendStatus(400);
-  }
-
-  console.log(JSON.stringify(order, null, 2));
-
-  res.sendStatus(200);
-});
-
-app.get("/ubereats", (req, res) => {
-  res.send("Uber webhook live");
-});
-
-app.listen(PORT, () => {
+app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
 });
