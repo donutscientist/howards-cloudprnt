@@ -824,8 +824,6 @@ printerStoppedLogged = false;
     nextPollInterval: pollInterval
   });
 
-});
-
   app.get("/starcloudprnt", (req, res) => {
 
     const token = req.query.token || req.query.jobToken || req.query.jobid;
