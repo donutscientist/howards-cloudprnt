@@ -848,7 +848,6 @@ app.get("/starcloudprnt", (req, res) => {
   setTimeout(() => completedJobs.delete(token), 10 * 60 * 1000).unref?.();
 });
 
-
   app.get("/", (req,res)=>{
   res.send("OK");
 });
