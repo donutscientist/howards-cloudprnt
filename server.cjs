@@ -779,7 +779,7 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-app.post("/starcloudprnt", (req, res) => {
+app.post("/starcloudprint", (req, res) => {
   console.log("PRINTER POLLED:", new Date().toISOString());
 
   if (printerStoppedLogged) {
@@ -822,7 +822,7 @@ app.post("/starcloudprnt", (req, res) => {
   });
 });
 
-app.get("/starcloudprnt", (req, res) => {
+app.get("/starcloudprint", (req, res) => {
   const token = req.query.token || req.query.jobToken || req.query.jobid;
 
   if (!token) {
