@@ -803,26 +803,29 @@ printerStoppedLogged = false;
 });
 
   app.get("/starcloudprnt", (req, res) => {
+  console.log("STAR GET RECEIVED:", new Date().toISOString());
 
-    const token = req.query.token || req.query.jobToken || req.query.jobid;
+  const token =
+    req.query.token ||
+    req.query.jobToken ||
+    req.query.jobid;
 
-    if (!token || !activeJobs.has(token)) {
-      return res.status(204).send();
-    }
+  if (!token) {
+    return res.status(200).send("CloudPRNT GET route is live");
+  }
 
-    console.log("DOWNLOADING JOB:", token);
+  if (!activeJobs.has(token)) {
+    return res.status(404).send("Print job not found");
+  }
 
-    const job = activeJobs.get(token);
+  const job = activeJobs.get(token);
 
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control", "no-store");
-    res.send(job);
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
+  res.setHeader("Content-Length", String(job.length));
+  res.setHeader("Cache-Control", "no-store");
 
-    activeJobs.delete(token);
-    pending = pending.filter((t) => t !== token);
-
-  });
+  return res.send(job);
+});
 
 
   app.get("/", (req,res)=>{
@@ -955,6 +958,10 @@ app.get("/clear-jobs", (req, res) => {
 
   return res.send(`Success: ${count} unprinted jobs cleared.`);
 });
+app.get("/cloudprnt-test", (req, res) => {
+  res.send("CloudPRNT server route is live");
+});
+
 app.listen(process.env.PORT || 3000, () => {
   console.log("SERVER RUNNING");
 });
