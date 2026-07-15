@@ -7,7 +7,8 @@ const BUSINESS_TZ = process.env.BUSINESS_TZ || "America/Chicago";
 const OPEN_TIME = process.env.OPEN_TIME || "04:30";
 const CLOSE_TIME = process.env.CLOSE_TIME || "17:00";
 const OPEN_PRINTER_POLL_SECONDS = Number(process.env.OPEN_PRINTER_POLL_SECONDS || 5);
-const CLOSED_PRINTER_POLL_SECONDS = Number(process.env.CLOSED_PRINTER_POLL_SECONDS || 43200);
+const CLOSED_PRINTER_POLL_SECONDS =
+  Number(process.env.CLOSED_PRINTER_POLL_SECONDS || 300);
 const MAX_QUEUE_DEPTH = Number(process.env.MAX_QUEUE_DEPTH || 50);
 const TRIM_QUEUE_TO = Number(process.env.TRIM_QUEUE_TO || 20);
 const cheerio = require("cheerio");
@@ -778,24 +779,21 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-  app.post("/starcloudprnt", (req, res) => {
+app.post("/starcloudprnt", (req, res) => {
   console.log("PRINTER POLLED:", new Date().toISOString());
 
-  // existing CloudPRNT logic
-});
-
   if (printerStoppedLogged) {
-  console.log("Printer polling resumes");
-}
+    console.log("Printer polling resumes");
+  }
 
-lastPrinterPollAt = Date.now();
-printerStoppedLogged = false;
+  lastPrinterPollAt = Date.now();
+  printerStoppedLogged = false;
 
   const isOpen = isBusinessHours();
 
   const pollInterval = isOpen
     ? OPEN_PRINTER_POLL_SECONDS
-    : CLOSED_PRINTER_POLL_SECONDS; // default 12 hours
+    : CLOSED_PRINTER_POLL_SECONDS;
 
   if (!isOpen) {
     return res.json({
@@ -805,7 +803,6 @@ printerStoppedLogged = false;
   }
 
   if (pending.length > 0) {
-
     const next = pending[0];
 
     console.log("JOB READY ->", next);
@@ -819,39 +816,37 @@ printerStoppedLogged = false;
     });
   }
 
-    return res.json({
+  return res.json({
     jobReady: false,
     nextPollInterval: pollInterval
   });
-}); // closes app.post("/starcloudprnt")
+});
 
 app.get("/starcloudprnt", (req, res) => {
+  const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-    const token = req.query.token || req.query.jobToken || req.query.jobid;
+  if (!token) {
+    return res.status(200).send("CloudPRNT endpoint is live. Printer polling uses POST.");
+  }
 
-    if (!token) {
-      return res.status(400).send("Missing job token");
-    }
+  if (!activeJobs.has(token)) {
+    return res.status(completedJobs.has(token) ? 410 : 204).send();
+  }
 
-    if (!activeJobs.has(token)) {
-      return res.status(completedJobs.has(token) ? 410 : 204).send();
-    }
+  console.log("DOWNLOADING JOB:", token);
 
-    console.log("DOWNLOADING JOB:", token);
+  const job = activeJobs.get(token);
 
-    const job = activeJobs.get(token);
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
+  res.setHeader("Content-Length", job.length);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(job);
 
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
-    res.setHeader("Cache-Control", "no-store");
-    res.send(job);
-
-    activeJobs.delete(token);
-    pending = pending.filter((t) => t !== token);
-    completedJobs.add(token);
-    setTimeout(() => completedJobs.delete(token), 10 * 60 * 1000).unref?.();
-
-  });
+  activeJobs.delete(token);
+  pending = pending.filter((t) => t !== token);
+  completedJobs.add(token);
+  setTimeout(() => completedJobs.delete(token), 10 * 60 * 1000).unref?.();
+});
 
 
   app.get("/", (req,res)=>{
@@ -973,7 +968,7 @@ app.post("/ubereats", (req, res) => {
   console.log("HEADERS:", req.headers);
 console.log("BODY:", req.body.toString());
 
-  const signature = req.headers["x-uber-signature"];
+    const signature = req.headers["x-uber-signature"];
 
   const expected = crypto
     .createHmac("sha256", UBER_SECRET)
