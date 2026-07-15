@@ -801,7 +801,7 @@ printerStoppedLogged = false;
 });
 
   app.get("/starcloudprnt", (req, res) => {
-
+console.log("TEST PRINTER POLLED:", new Date().toISOString());
     const token = req.query.token || req.query.jobToken || req.query.jobid;
 
     if (!token || !activeJobs.has(token)) {
@@ -822,6 +822,11 @@ printerStoppedLogged = false;
 
   });
 
+app.get("/starcloudprnt", (req, res) => {
+
+  res.send("Safe CloudPRNT test route is live");
+
+});
 
   app.get("/", (req,res)=>{
   res.send("OK");
