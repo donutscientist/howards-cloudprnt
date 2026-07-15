@@ -819,12 +819,13 @@ printerStoppedLogged = false;
     });
   }
 
-  res.json({
+    return res.json({
     jobReady: false,
     nextPollInterval: pollInterval
   });
+}); // closes app.post("/starcloudprnt")
 
-  app.get("/starcloudprnt", (req, res) => {
+app.get("/starcloudprnt", (req, res) => {
 
     const token = req.query.token || req.query.jobToken || req.query.jobid;
 
