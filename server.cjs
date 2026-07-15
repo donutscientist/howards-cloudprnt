@@ -756,7 +756,7 @@ if (platform === "DD") {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-  app.post("/starcloudprnt", (req, res) => {
+  app.post("/starcloudprint", (req, res) => {
 
   if (printerStoppedLogged) {
   console.log("Printer polling resumes");
@@ -800,7 +800,7 @@ printerStoppedLogged = false;
 
 });
 
-  app.get("/starcloudprnt", (req, res) => {
+  app.get("/starcloudprint", (req, res) => {
 console.log("TEST PRINTER POLLED:", new Date().toISOString());
     const token = req.query.token || req.query.jobToken || req.query.jobid;
 
@@ -822,7 +822,7 @@ console.log("TEST PRINTER POLLED:", new Date().toISOString());
 
   });
 
-app.get("/starcloudprnt", (req, res) => {
+app.get("/starcloudprint", (req, res) => {
 
   res.send("Safe CloudPRNT test route is live");
 
