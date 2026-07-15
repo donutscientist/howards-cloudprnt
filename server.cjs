@@ -779,6 +779,10 @@ if (platform === "DD") {
 // --------------------
 
   app.post("/starcloudprnt", (req, res) => {
+  console.log("PRINTER POLLED:", new Date().toISOString());
+
+  // existing CloudPRNT logic
+});
 
   if (printerStoppedLogged) {
   console.log("Printer polling resumes");
