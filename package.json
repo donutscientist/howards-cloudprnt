@@ -4,7 +4,8 @@
   "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs",
-    "check": "node --check server.cjs"
+    "check": "node --check server.cjs",
+    "diagnostic:test": "node scripts/diagnostic-test.cjs"
   },
   "dependencies": {
     "googleapis": "^137.0.0",

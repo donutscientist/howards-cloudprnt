@@ -8,7 +8,9 @@ const app = express();
 
 const TIME_ZONE = process.env.TIME_ZONE || "America/Chicago";
 const UBER_SECRET = process.env.UBER_SECRET || "";
-const CLEAR_JOBS_KEY = process.env.CLEAR_JOBS_KEY || "";
+// Temporary fallback preserves the existing emergency clear URL until Render has
+// CLEAR_JOBS_KEY configured. Prefer setting process.env.CLEAR_JOBS_KEY.
+const CLEAR_JOBS_KEY = process.env.CLEAR_JOBS_KEY || "howards-clear-123";
 const PORT = process.env.PORT || 3000;
 const EMAIL_POLL_INTERVAL_MS = 5000;
 const POLLING_WATCHDOG_MS = 5 * 60 * 1000;
@@ -17,6 +19,15 @@ const CLOSED_POLL_INTERVAL_SECONDS = 300;
 
 const openTime = Number(process.env.OPEN_TIME_MINUTES || 4 * 60 + 30); // 4:30 AM
 const closeTime = Number(process.env.CLOSE_TIME_MINUTES || 17 * 60); // 5:00 PM
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+});
 
 function isBusinessHours() {
 
@@ -34,12 +45,10 @@ function isBusinessHours() {
 
 }
 
-app.use(express.raw({ type: "*/*" }));
-
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
 // --------------------
-let activeJobs = new Map(); // token -> Buffer
+let activeJobs = new Map(); // token -> { buffer: Buffer, downloaded: boolean }
 let pending = [];           // tokens FIFO
 
 let lastEmailPollAt = Date.now();
@@ -47,6 +56,24 @@ let lastPrinterPollAt = Date.now();
 
 let emailStoppedLogged = false;
 let printerStoppedLogged = false;
+let emailCheckInProgress = false;
+
+function createJobToken() {
+  return Math.random().toString(36).substring(2, 10);
+}
+
+function enqueuePrintJob(jobBuffer, id = createJobToken()) {
+  activeJobs.set(id, { buffer: jobBuffer, downloaded: false });
+  if (!pending.includes(id)) {
+    pending.push(id);
+  }
+  return id;
+}
+
+function removeJob(id) {
+  pending = pending.filter((t) => t !== id);
+  activeJobs.delete(id);
+}
 
 // --------------------
 // GMAIL AUTH
@@ -581,6 +608,13 @@ return Buffer.concat(b);
 // CHECK EMAIL (GH + SQ)
 // --------------------
 async function checkEmail() {
+  if (emailCheckInProgress) {
+    console.log("CHECK EMAIL SKIPPED: already running");
+    return;
+  }
+
+  emailCheckInProgress = true;
+
   try {
     
     if (emailStoppedLogged) {
@@ -732,7 +766,6 @@ if (platform === "DD") {
 }
     if (!parsed) return;
 
-    const id = Math.random().toString(36).substring(2,10);
     const jobBuf = buildReceipt(
       parsed.customer,
       parsed.orderType,
@@ -743,8 +776,7 @@ if (platform === "DD") {
       parsed.note
     );
 
-    activeJobs.set(id, jobBuf);
-    pending.push(id);
+    const id = enqueuePrintJob(jobBuf);
 
     console.log("QUEUE ADDED:", id);
 
@@ -757,6 +789,8 @@ if (platform === "DD") {
     console.log("PRINT JOB ADDED");
   } catch (e) {
     console.log("CHECK EMAIL ERROR:", e.message);
+  } finally {
+    emailCheckInProgress = false;
   }
 }
 
@@ -774,6 +808,8 @@ const CLOUDPRNT_PATHS = [
 ];
 
 function handleCloudPrntPoll(req, res) {
+  console.log(`PRINTER POLLED: ${new Date().toISOString()}`);
+
   if (printerStoppedLogged) {
     console.log("Printer polling resumes");
   }
@@ -786,6 +822,8 @@ function handleCloudPrntPoll(req, res) {
   const pollInterval = isOpen
     ? OPEN_POLL_INTERVAL_SECONDS
     : CLOSED_POLL_INTERVAL_SECONDS;
+
+  pending = pending.filter((token) => activeJobs.has(token));
 
   if (!isOpen) {
     return res.json({
@@ -819,24 +857,44 @@ function handleCloudPrntJobDownload(req, res) {
   const token = req.query.token || req.query.jobToken || req.query.jobid || req.query.jobId;
 
   if (!token || !activeJobs.has(token)) {
-    return res.status(204).send();
+    return res.status(200).send(
+      "CloudPRNT endpoint is running. Provide a valid job token with ?jobToken=<token> to download a queued print job."
+    );
   }
 
   console.log("DOWNLOADING JOB:", token);
 
   const job = activeJobs.get(token);
+  job.downloaded = true;
 
   res.setHeader("Content-Type", "application/vnd.star.starprnt");
-  res.setHeader("Content-Length", job.length);
+  res.setHeader("Content-Length", job.buffer.length);
   res.setHeader("Cache-Control", "no-store");
-  res.send(job);
+  res.on("finish", () => {
+    // Many Star CloudPRNT devices treat a completed GET download as the
+    // confirmation step and do not send a later DELETE. Remove the token only
+    // after Express has successfully flushed the print buffer so the same job
+    // cannot be printed repeatedly.
+    removeJob(token);
+    console.log("JOB COMPLETED AND REMOVED:", token);
+  });
+  res.send(job.buffer);
+}
 
-  activeJobs.delete(token);
-  pending = pending.filter((t) => t !== token);
+function handleCloudPrntDelete(req, res) {
+  const token = req.query.token || req.query.jobToken || req.query.jobid || req.query.jobId;
+
+  if (token && activeJobs.has(token)) {
+    removeJob(token);
+    console.log("JOB COMPLETED AND REMOVED:", token);
+  }
+
+  return res.status(200).send("OK");
 }
 
 app.post(CLOUDPRNT_PATHS, handleCloudPrntPoll);
 app.get(CLOUDPRNT_PATHS, handleCloudPrntJobDownload);
+app.delete(CLOUDPRNT_PATHS, handleCloudPrntDelete);
 app.post("/", handleCloudPrntPoll);
 
 
@@ -845,11 +903,18 @@ app.post("/", handleCloudPrntPoll);
     return handleCloudPrntJobDownload(req, res);
   }
 
+  res.status(200).send("OK");
+});
+
+app.get("/health", (req, res) => {
   res.json({
     ok: true,
     cloudPrntPaths: CLOUDPRNT_PATHS,
     pendingJobs: pending.length,
-    businessHours: isBusinessHours()
+    activeJobs: activeJobs.size,
+    businessHours: isBusinessHours(),
+    lastPrinterPollAt: new Date(lastPrinterPollAt).toISOString(),
+    lastEmailPollAt: new Date(lastEmailPollAt).toISOString()
   });
 });
 
@@ -883,20 +948,22 @@ function stopEmailPolling() {
   }
 }
 
-// check every 30 sec to switch ON/OFF exactly
-setInterval(() => {
+if (process.env.DISABLE_EMAIL_POLLING !== "1") {
+  // check every 30 sec to switch ON/OFF exactly
+  setInterval(() => {
 
+    if (isBusinessHours()) {
+      startEmailPolling();
+    } else {
+      stopEmailPolling();
+    }
+
+  }, 30000);
+
+  // run once on startup
   if (isBusinessHours()) {
     startEmailPolling();
-  } else {
-    stopEmailPolling();
   }
-
-}, 30000);
-
-// run once on startup
-if (isBusinessHours()) {
-  startEmailPolling();
 }
 setInterval(() => {
   if (pending.length > 50) {
@@ -925,7 +992,7 @@ app.get("/restart", (req, res) => {
   setTimeout(() => process.exit(0), 1000);
 });
 
-app.post("/ubereats", (req, res) => {
+app.post("/ubereats", express.raw({ type: "*/*" }), (req, res) => {
 
   console.log("📦 UBER RAW RECEIVED");
 
@@ -934,8 +1001,12 @@ app.post("/ubereats", (req, res) => {
     return res.sendStatus(503);
   }
   
-  console.log("HEADERS:", req.headers);
-console.log("BODY:", req.body.toString());
+  console.log("UBER HEADERS:", {
+    "content-type": req.headers["content-type"],
+    "user-agent": req.headers["user-agent"],
+    "x-uber-signature-present": Boolean(req.headers["x-uber-signature"])
+  });
+  console.log("BODY BYTES:", req.body.length);
 
   const signature = req.headers["x-uber-signature"];
 
@@ -971,11 +1042,6 @@ app.get("/ubereats", (req, res) => {
 });
 
 app.get("/clear-jobs", (req, res) => {
-  if (!CLEAR_JOBS_KEY) {
-    console.log("CLEAR_JOBS_KEY is not configured");
-    return res.status(503).send("Clear jobs endpoint is not configured.");
-  }
-
   if (req.query.key !== CLEAR_JOBS_KEY) {
     return res.status(401).send("Unauthorized");
   }
@@ -989,6 +1055,14 @@ app.get("/clear-jobs", (req, res) => {
 
   return res.send(`Success: ${count} unprinted jobs cleared.`);
 });
+
+if (process.env.NODE_ENV === "test") {
+  app.post("/test/enqueue", (req, res) => {
+    const token = enqueuePrintJob(Buffer.from("TEST PRINT JOB\n", "ascii"), "test-job");
+    res.json({ token });
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`SERVER RUNNING on port ${PORT}`);
 });
