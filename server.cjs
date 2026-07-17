@@ -1,5 +1,3 @@
-const crypto = require("crypto");
-const UBER_SECRET = "howards-ubereats-secret-123"; // SAME as webhook
 const cheerio = require("cheerio");
 const express = require("express");
 const { google } = require("googleapis");
@@ -92,11 +90,6 @@ function getPartText(payload, mimeType) {
 // Backward-compatible: keep your old behavior for GH (HTML)
 function getHtmlBody(payload) {
   return getPartText(payload, "text/html");
-}
-
-// For Square, use text/plain (quoted printable)
-function getPlainBody(payload) {
-  return getPartText(payload, "text/plain");
 }
 
 ////////////////////////////////////////////////////
@@ -338,150 +331,6 @@ return { customer, orderType, phone, totalItems, items, estimate: "", note: "" }
 
 }
 
-function cleanModifierText(raw) {
-  let s = (raw || "").replace(/\u00A0/g, " ").trim();
-
-  // remove leading icons/bullets/spaces
-  s = s.replace(/^[\s➕▪️]+/g, "");
-
-  // capture qty at end: ×2 or x2
-  let qty = "";
-  const qtyMatch = s.match(/(?:×|x)\s*(\d+)\s*$/i);
-  if (qtyMatch) {
-    qty = qtyMatch[1];
-    s = s.replace(/(?:×|x)\s*\d+\s*$/i, "").trim();
-  }
-
-  // remove any ($price) anywhere
-  s = s.replace(/\(\s*\$[\d.,]+\s*\)/g, "").trim();
-
-  // convert multiplication sign to normal x (just in case)
-  s = s.replace(/×/g, "x");
-
-  // remove control chars that printers show as \c\2 etc
-  s = s.replace(/[\x00-\x1F\x7F]/g, "");
-
-  // normalize spaces
-  s = s.replace(/\s+/g, " ").trim();
-
-  // re-apply qty in a clean way
-  if (qty) s = `${qty}x ${s}`;
-
-  return s;
-}
-
-function parseSquareHTML(html) {
-  const $ = cheerio.load(html);
-
-  const phoneRegex = /\(\d{3}\)\s*\d{3}-\d{4}/;
-
-  // -------------------------
-  // CUSTOMER (Arthur Ju)
-  // -------------------------
-  // In your email this is inside table.table-date-and-tenders, left column
-  let phone = "";
-  let customer = "UNKNOWN";
-
-  $('td').each((i,el)=>{
-    const txt = $(el).text().trim();
-
-    const match = txt.match(/\(\d{3}\)\s*\d{3}-\d{4}/);
-    if(match){
-      phone = match[0]; // ONLY phone, stop before email
-      customer = $(el).prev().text().trim() || "UNKNOWN";
-    }
-  });
-
-  // -------------------------
-  // NOTE (same <tr>: label + value)
-  // -------------------------
-  let note = "";
-  const noteRow = $("div.pickup-fulfillment-title.p:contains('Notes')").first().closest("tr");
-  if (noteRow.length) {
-    note = noteRow.find("div.pickup-info.p").first().text().trim();
-  }
-
-  // -------------------------
-  // ESTIMATE + ORDER TYPE
-  // -------------------------
-  let estimate = "";
-  let orderType = "Square Pickup";
-
-  const pickupRow = $("div.pickup-fulfillment-title.p:contains('Estimated Pickup Time')")
-    .first()
-    .closest("tr");
-  const deliveryRow = $("div.pickup-fulfillment-title.p:contains('Estimated Delivery Time')")
-    .first()
-    .closest("tr");
-
-  if (pickupRow.length) {
-    estimate = pickupRow.find("div.pickup-info.p").first().text().trim();
-    orderType = "Square Pickup";
-  } else if (deliveryRow.length) {
-    estimate = deliveryRow.find("div.pickup-info.p").first().text().trim();
-    orderType = "Square Delivery";
-  }
-
-  // -------------------------
-  // ITEMS + MODIFIERS (ONLY tr.item-row are items)
-  // -------------------------
-  const items = [];
-  let current = null;
-
-  const table = $("table.table-payment-info").first();
-  const rows = table.find("tr");
-
-  rows.each((_, tr) => {
-    const $tr = $(tr);
-
-    // NEW ITEM
-    if ($tr.hasClass("item-row")) {
-
-  let name = $tr.find("h2.item-name").first().text().trim();
-  if (!name) return;
-
-  let qty = 1;
-
-  // check if Square injected qty like:
-  // "Dozen Donut Holes × 4"
-  // OR decoded garbage: "Dozen Donut Holes c\ 4"
-  let match =
-    name.match(/[x×]\s*(\d+)\s*$/i) ||
-    name.match(/c\\\s*(\d+)\s*$/i);
-
-  if (match) {
-    qty = parseInt(match[1]);
-    name = name.replace(match[0], "").trim();
-  }
-
-  current = { item: `${qty}x ${name}`, modifiers: [] };
-  items.push(current);
-  return;
-}
-
-    // MODIFIER ROW (only if we already have an item)
-    const isModifier = $(tr).find('td.item-modifier-name').length > 0;
-
-  const name = $(tr).find('div.p').first().text().trim();
-
-  if(!name) return;
-
-// MODIFIER
-if (isModifier && current) {
-  const raw = $(tr).find("div.p").first().text();
-  const mod = cleanModifierText(raw);
-  if (mod) current.modifiers.push(mod);
-  return;
-}
-
-  });
-
-  // total items = number of item rows
-  const totalItems = String(items.length);
-
-  return { customer, orderType, phone, totalItems, estimate, note, items };
-}
-
 // --------------------
 // RECEIPT BUILDER
 // NOTE placement: directly under Total Items
@@ -570,7 +419,7 @@ return Buffer.concat(b);
 }
 
 // --------------------
-// CHECK EMAIL (GH + SQ)
+// CHECK EMAIL (GRUBHUB + DOORDASH)
 // --------------------
 async function checkEmail() {
   try {
@@ -589,11 +438,6 @@ emailStoppedLogged = false;
       maxResults: 1
     });
 
-    const sq = await gmail.users.messages.list({
-      userId: "me",
-      q: "is:unread label:SQ_PRINT",
-      maxResults: 1
-    });
     const dd = await gmail.users.messages.list({
   userId: "me",
   q: "is:unread label:DD_PRINT",
@@ -607,10 +451,6 @@ emailStoppedLogged = false;
   messageId = gh.data.messages[0].id;
   platform = "GH";
 } 
-else if (sq.data.messages?.length) {
-  messageId = sq.data.messages[0].id;
-  platform = "SQ";
-}
 else if (dd.data.messages?.length) {
   messageId = dd.data.messages[0].id;
   platform = "DD";
@@ -656,32 +496,6 @@ else {
   }
 }
 
-    if (platform === "SQ") {
-
-  const headers = msg.data.payload.headers;
-
-  const subject =
-    headers.find(h => h.name === "Subject")?.value || "";
-
-  // Extract Square order ID
-  let orderId = "";
-  const match = subject.match(/Order\s*#(\d+)/i);
-  if (match) {
-    orderId = match[1];
-  }
-
-  const html = getHtmlBody(msg.data.payload)
-    .replace(/\u00A0/g, " ")
-    .replace(/\t/g, " ")
-    .replace(/\r/g, "")
-    .replace(/[ ]+/g, " ");
-
-  parsed = parseSquareHTML(html);
-
-  if (parsed && orderId) {
-    parsed.phone = `Order #${orderId}`;
-  }
-}
 if (platform === "DD") {
 
   const headers = msg.data.payload.headers;
@@ -821,12 +635,6 @@ console.log("TEST PRINTER POLLED:", new Date().toISOString());
     pending = pending.filter((t) => t !== token);
 
   });
-
-app.get("/starcloudprint", (req, res) => {
-
-  res.send("Safe CloudPRNT test route is live");
-
-});
 
   app.get("/", (req,res)=>{
   res.send("OK");
