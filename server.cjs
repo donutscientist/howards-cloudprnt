@@ -631,6 +631,26 @@ function verifySquareSignature(req, rawBodyBuffer) {
   return expectedBuf.length === signatureBuf.length && crypto.timingSafeEqual(expectedBuf, signatureBuf);
 }
 
+function logSquareApiError({ requestUrl, statusCode, responseBody }) {
+  let squareError = null;
+
+  try {
+    const parsed = JSON.parse(responseBody);
+    squareError = Array.isArray(parsed?.errors) ? parsed.errors[0] : null;
+  } catch (err) {
+    squareError = null;
+  }
+
+  console.error("Square Orders API request failed", {
+    requestUrl,
+    status: statusCode,
+    responseBody,
+    squareErrorCode: squareError?.code,
+    squareErrorCategory: squareError?.category,
+    squareErrorDetail: squareError?.detail
+  });
+}
+
 function squareApiGet(path) {
   if (process.env.SQ_TEST_ORDER_JSON) {
     return Promise.resolve(JSON.parse(process.env.SQ_TEST_ORDER_JSON));
@@ -639,6 +659,7 @@ function squareApiGet(path) {
   return new Promise((resolve, reject) => {
     const environment = String(process.env.SQ_ENVIRONMENT || "production").toLowerCase();
     const hostname = environment === "sandbox" ? "connect.squareupsandbox.com" : "connect.squareup.com";
+    const requestUrl = `https://${hostname}${path}`;
 
     const req = https.request({
       method: "GET",
@@ -654,6 +675,7 @@ function squareApiGet(path) {
       res.on("data", chunk => data += chunk);
       res.on("end", () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
+          logSquareApiError({ requestUrl, statusCode: res.statusCode, responseBody: data });
           return reject(new Error(`Square API ${res.statusCode}`));
         }
         try {
