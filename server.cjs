@@ -12,6 +12,8 @@ let closeTime = 17 * 60;    // 5:00 PM
 
 function isBusinessHours() {
 
+  if (process.env.TEST_ALWAYS_OPEN === "1") return true;
+
   const now = new Date().toLocaleString("en-US", {
     timeZone: "America/Chicago",
     hour: "2-digit",
@@ -34,20 +36,44 @@ app.use(express.raw({ type: "*/*" }));
 let activeJobs = new Map(); // token -> Buffer
 let pending = [];           // tokens FIFO
 
+const routeQueues = new Map(); // route -> { activeJobs, pending }
+const squareSeenEventIds = new Set();
+const squareQueuedOrderVersions = new Set();
+
 let lastEmailPollAt = Date.now();
 let lastPrinterPollAt = Date.now();
 
 let emailStoppedLogged = false;
 let printerStoppedLogged = false;
 
+function normalizePrintRoute(route) {
+  const raw = String(route || "").trim();
+  if (!raw || raw === "/") return "";
+  return raw.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function getRouteQueue(route) {
+  const normalized = normalizePrintRoute(route);
+  if (!routeQueues.has(normalized)) {
+    routeQueues.set(normalized, { activeJobs: new Map(), pending: [] });
+  }
+  return routeQueues.get(normalized);
+}
+
 function enqueueReceipt(jobBuf, route = "") {
   const id = Math.random().toString(36).substring(2,10);
+  const normalizedRoute = normalizePrintRoute(route);
 
-  activeJobs.set(id, jobBuf);
-  pending.push(id);
+  if (normalizedRoute) {
+    const queue = getRouteQueue(normalizedRoute);
+    queue.activeJobs.set(id, jobBuf);
+    queue.pending.push(id);
+  } else {
+    activeJobs.set(id, jobBuf);
+    pending.push(id);
+  }
 
   console.log("QUEUE ADDED:", id);
-  if (route) console.log("Square job queued:", id, "route:", route);
 
   return id;
 }
@@ -579,25 +605,24 @@ if (platform === "DD") {
 
 // --------------------
 // SQUARE WEBHOOK ORDER PRINTING
+// Printable rule: only order.created/order.updated events whose retrieved order is OPEN are queued,
+// and each event ID plus order ID/version pair is accepted once. COMPLETED/CANCELED routine updates are ignored.
 // --------------------
-function getSquareNotificationUrl(req) {
-  if (process.env.SQUARE_WEBHOOK_URL) return process.env.SQUARE_WEBHOOK_URL;
-
-  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${protocol}://${host}${req.originalUrl}`;
+function getSquareNotificationUrl() {
+  return process.env.SQ_URL;
 }
 
-function verifySquareSignature(req, rawBody) {
-  const signatureKey = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
+function verifySquareSignature(req, rawBodyBuffer) {
+  const signatureKey = process.env.SQ_SIGNATURE;
+  const notificationUrl = getSquareNotificationUrl();
   const signature = req.get("x-square-hmacsha256-signature") || "";
 
-  if (!signatureKey || !signature) return false;
+  if (!signatureKey || !notificationUrl || !signature || !Buffer.isBuffer(rawBodyBuffer)) return false;
 
-  const payload = getSquareNotificationUrl(req) + rawBody;
+  const payload = Buffer.concat([Buffer.from(notificationUrl, "utf8"), rawBodyBuffer]);
   const expected = crypto
     .createHmac("sha256", signatureKey)
-    .update(payload, "utf8")
+    .update(payload)
     .digest("base64");
 
   const expectedBuf = Buffer.from(expected, "base64");
@@ -607,10 +632,17 @@ function verifySquareSignature(req, rawBody) {
 }
 
 function squareApiGet(path) {
+  if (process.env.SQ_TEST_ORDER_JSON) {
+    return Promise.resolve(JSON.parse(process.env.SQ_TEST_ORDER_JSON));
+  }
+
   return new Promise((resolve, reject) => {
+    const environment = String(process.env.SQ_ENVIRONMENT || "production").toLowerCase();
+    const hostname = environment === "sandbox" ? "connect.squareupsandbox.com" : "connect.squareup.com";
+
     const req = https.request({
       method: "GET",
-      hostname: "connect.squareup.com",
+      hostname,
       path,
       headers: {
         "Authorization": `Bearer ${process.env.SQ_TOKEN}`,
@@ -622,7 +654,7 @@ function squareApiGet(path) {
       res.on("data", chunk => data += chunk);
       res.on("end", () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`Square API ${res.statusCode}: ${data}`));
+          return reject(new Error(`Square API ${res.statusCode}`));
         }
         try {
           resolve(JSON.parse(data));
@@ -640,21 +672,39 @@ function squareApiGet(path) {
 function getSquareOrderId(event) {
   return event?.data?.object?.order_created?.order_id ||
     event?.data?.object?.order_updated?.order_id ||
+    event?.data?.object?.order?.id ||
     event?.data?.id;
 }
 
-function getSquareRecipient(order) {
+function getSquareEventOrderVersion(event) {
+  return event?.data?.object?.order_updated?.version ||
+    event?.data?.object?.order_created?.version ||
+    event?.data?.object?.order?.version;
+}
+
+function getSquareFulfillmentDetails(order) {
   for (const fulfillment of order.fulfillments || []) {
     const details = fulfillment.pickup_details || fulfillment.delivery_details || fulfillment.shipment_details;
-    if (details?.recipient?.display_name) return details.recipient.display_name;
+    if (details) return { fulfillment, details };
   }
-  return order.customer_id || "Square";
+  return { fulfillment: {}, details: {} };
+}
+
+function getSquareRecipient(order) {
+  const { details } = getSquareFulfillmentDetails(order);
+  return details?.recipient?.display_name || order.ticket_name || order.customer_id || "Square";
 }
 
 function getSquareOrderType(order) {
-  const fulfillment = (order.fulfillments || [])[0] || {};
+  const { fulfillment } = getSquareFulfillmentDetails(order);
   if (fulfillment.type === "DELIVERY") return "Square Delivery";
-  return "Square Pickup";
+  if (fulfillment.type === "PICKUP") return "Square Pickup";
+  return "Square Order";
+}
+
+function getSquareOrderTime(order) {
+  const { details } = getSquareFulfillmentDetails(order);
+  return details.pickup_at || details.deliver_at || details.placed_at || order.created_at || "";
 }
 
 function getSquareOrderNumber(order) {
@@ -662,14 +712,18 @@ function getSquareOrderNumber(order) {
 }
 
 function parseSquareOrder(order) {
+  const { details } = getSquareFulfillmentDetails(order);
   const items = (order.line_items || []).map((lineItem) => ({
     item: `${lineItem.quantity || "1"}x ${lineItem.name || "Item"}`,
     modifiers: (lineItem.modifiers || []).map((modifier) => modifier.name).filter(Boolean)
   }));
 
   const totalItems = String(
-    (order.line_items || []).reduce((sum, lineItem) => sum + (parseInt(lineItem.quantity, 10) || 1), 0)
+    (order.line_items || []).reduce((sum, lineItem) => sum + (Number.parseFloat(lineItem.quantity) || 1), 0)
   );
+
+  const notes = [order.note, details.note].filter(Boolean).join(" / ");
+  const source = order.source?.name ? `Source: ${order.source.name}` : "";
 
   return {
     customer: getSquareRecipient(order),
@@ -677,53 +731,45 @@ function parseSquareOrder(order) {
     phone: `Order #${getSquareOrderNumber(order)}`,
     totalItems,
     items,
-    estimate: "",
-    note: ""
+    estimate: getSquareOrderTime(order),
+    note: [notes, source].filter(Boolean).join(" / ")
   };
 }
 
 function routeForSquareLocation(locationId) {
-  if (locationId === process.env.SQ_LOCATION_1) return process.env.ROUTE_1;
-  if (locationId === process.env.SQ_LOCATION_2) return process.env.ROUTE_2;
+  if (locationId === process.env.SQ_LOCATION_1) {
+    console.log("SQUARE LOCATION 1 MATCHED");
+    return normalizePrintRoute(process.env.ROUTE_1);
+  }
+  if (locationId === process.env.SQ_LOCATION_2) {
+    console.log("SQUARE LOCATION 2 MATCHED");
+    return normalizePrintRoute(process.env.ROUTE_2);
+  }
+  console.log("SQUARE LOCATION UNKNOWN");
   return null;
 }
 
-app.post("/square-webhook", async (req, res) => {
-  console.log("Square webhook received");
+function isSquarePrintable(order) {
+  return (order?.state || order?.status || "OPEN") === "OPEN";
+}
 
-  const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : String(req.body || "");
-  if (!verifySquareSignature(req, rawBody)) {
-    console.log("Square webhook rejected: invalid signature");
-    return res.status(401).send("Invalid signature");
-  }
-
-  let event;
-  try {
-    event = JSON.parse(rawBody);
-  } catch (err) {
-    console.log("Square webhook rejected: invalid JSON");
-    return res.status(400).send("Invalid JSON");
-  }
-
-  if (!["order.created", "order.updated"].includes(event.type)) {
-    return res.status(200).send("Ignored");
-  }
-
+async function processSquareOrder(event) {
   const orderId = getSquareOrderId(event);
-  if (!orderId) return res.status(200).send("No order ID");
+  if (!orderId) return;
 
   try {
     const { order } = await squareApiGet(`/v2/orders/${encodeURIComponent(orderId)}`);
-    const locationId = order?.location_id;
-    const route = routeForSquareLocation(locationId);
+    if (!isSquarePrintable(order)) return;
 
-    if (!route) {
-      console.log("Square webhook ignored: unknown location", locationId);
-      return res.status(200).send("Unknown location");
+    const version = order?.version || getSquareEventOrderVersion(event) || "unknown";
+    const orderVersionKey = `${orderId}:${version}`;
+    if (squareQueuedOrderVersions.has(orderVersionKey)) {
+      console.log("SQUARE DUPLICATE SKIPPED");
+      return;
     }
 
-    console.log("Square location matched:", locationId);
-    console.log("Square route selected:", route);
+    const route = routeForSquareLocation(order?.location_id);
+    if (!route) return;
 
     const parsed = parseSquareOrder(order);
     const jobBuf = buildReceipt(
@@ -736,12 +782,45 @@ app.post("/square-webhook", async (req, res) => {
       parsed.note
     );
 
-    const jobId = enqueueReceipt(jobBuf, route);
-    console.log("Square job queued:", jobId);
-    res.status(200).send("Queued");
+    enqueueReceipt(jobBuf, route);
+    squareQueuedOrderVersions.add(orderVersionKey);
+    console.log(`SQUARE ORDER QUEUED: ${orderId} -> ${route}`);
   } catch (err) {
-    console.log("SQUARE WEBHOOK ERROR:", err.message);
-    res.status(500).send("Square webhook error");
+    console.log("SQUARE ORDER RETRIEVE ERROR", err.message);
+  }
+}
+
+app.get("/sq-webhook", (req, res) => {
+  res.send("Square webhook route is live");
+});
+
+app.post("/sq-webhook", (req, res) => {
+  console.log("SQUARE WEBHOOK RECEIVED");
+
+  const rawBodyBuffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ""), "utf8");
+  if (!verifySquareSignature(req, rawBodyBuffer)) {
+    console.log("SQUARE INVALID SIGNATURE");
+    return res.status(403).send("Invalid signature");
+  }
+  console.log("SQUARE SIGNATURE VERIFIED");
+
+  let event;
+  try {
+    event = JSON.parse(rawBodyBuffer.toString("utf8"));
+  } catch (err) {
+    return res.status(400).send("Invalid JSON");
+  }
+
+  if (event.event_id && squareSeenEventIds.has(event.event_id)) {
+    console.log("SQUARE DUPLICATE SKIPPED");
+    return res.status(200).send("Duplicate");
+  }
+  if (event.event_id) squareSeenEventIds.add(event.event_id);
+
+  res.status(200).send("OK");
+
+  if (["order.created", "order.updated"].includes(event.type)) {
+    processSquareOrder(event);
   }
 });
 
@@ -814,6 +893,64 @@ console.log("TEST PRINTER POLLED:", new Date().toISOString());
     pending = pending.filter((t) => t !== token);
 
   });
+
+
+function registerCloudPrntRoute(route) {
+  const normalizedRoute = normalizePrintRoute(route);
+  if (!normalizedRoute) return;
+  const path = `/${normalizedRoute}`;
+
+  app.post(path, (req, res) => {
+    console.log(`PRINTER POLLED: ${normalizedRoute}`);
+
+    lastPrinterPollAt = Date.now();
+    printerStoppedLogged = false;
+
+    const isOpen = isBusinessHours();
+    const pollInterval = isOpen ? 5 : 43200;
+    if (!isOpen) {
+      return res.json({ jobReady: false, nextPollInterval: pollInterval });
+    }
+
+    const queue = getRouteQueue(normalizedRoute);
+    if (queue.pending.length > 0) {
+      const next = queue.pending[0];
+      console.log(`JOB READY: ${normalizedRoute} -> ${next}`);
+      return res.json({
+        jobReady: true,
+        mediaTypes: ["application/vnd.star.starprnt"],
+        jobToken: next,
+        contentType: "application/vnd.star.starprnt",
+        nextPollInterval: pollInterval
+      });
+    }
+
+    res.json({ jobReady: false, nextPollInterval: pollInterval });
+  });
+
+  app.get(path, (req, res) => {
+    const token = req.query.token || req.query.jobToken || req.query.jobid;
+    const queue = getRouteQueue(normalizedRoute);
+
+    if (!token || !queue.activeJobs.has(token)) {
+      return res.status(204).send();
+    }
+
+    console.log(`JOB DOWNLOADED: ${normalizedRoute} -> ${token}`);
+
+    const job = queue.activeJobs.get(token);
+    res.setHeader("Content-Type", "application/vnd.star.starprnt");
+    res.setHeader("Content-Length", job.length);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(job);
+
+    queue.activeJobs.delete(token);
+    queue.pending = queue.pending.filter((t) => t !== token);
+  });
+}
+
+registerCloudPrntRoute(process.env.ROUTE_1);
+registerCloudPrntRoute(process.env.ROUTE_2);
 
   app.get("/", (req,res)=>{
   res.send("OK");
@@ -891,6 +1028,10 @@ app.get("/restart", (req, res) => {
   setTimeout(() => process.exit(0), 1000);
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
-});
+if (require.main === module) {
+  app.listen(process.env.PORT || 3000, () => {
+    console.log("SERVER RUNNING");
+  });
+}
+
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute };

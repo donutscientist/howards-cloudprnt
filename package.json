@@ -4,7 +4,8 @@
   "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs",
-    "check": "node --check server.cjs"
+    "check": "node --check server.cjs",
+    "test": "node scripts/verify-square-webhook.cjs"
   },
   "dependencies": {
     "googleapis": "^137.0.0",
