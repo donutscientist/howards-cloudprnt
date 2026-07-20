@@ -37,8 +37,11 @@ let activeJobs = new Map(); // token -> Buffer
 let pending = [];           // tokens FIFO
 
 const routeQueues = new Map(); // route -> { activeJobs, pending }
-const squareSeenEventIds = new Set();
-const squareQueuedOrderVersions = new Set();
+const SQUARE_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
+const SQUARE_DEDUP_MAX_ENTRIES = 5000;
+const recentlyProcessedSquareOrders = new Map(); // orderId -> { status, expiresAt }
+const completedJobSquareOrderIds = new Map(); // orderId -> expiresAt
+
 
 let lastEmailPollAt = Date.now();
 let lastPrinterPollAt = Date.now();
@@ -60,16 +63,16 @@ function getRouteQueue(route) {
   return routeQueues.get(normalized);
 }
 
-function enqueueReceipt(jobBuf, route = "") {
+function enqueueReceipt(jobBuf, route = "", metadata = {}) {
   const id = Math.random().toString(36).substring(2,10);
   const normalizedRoute = normalizePrintRoute(route);
 
   if (normalizedRoute) {
     const queue = getRouteQueue(normalizedRoute);
-    queue.activeJobs.set(id, jobBuf);
+    queue.activeJobs.set(id, { buf: jobBuf, metadata });
     queue.pending.push(id);
   } else {
-    activeJobs.set(id, jobBuf);
+    activeJobs.set(id, { buf: jobBuf, metadata });
     pending.push(id);
   }
 
@@ -606,8 +609,118 @@ if (platform === "DD") {
 // --------------------
 // SQUARE WEBHOOK ORDER PRINTING
 // Printable rule: only order.created/order.updated events whose retrieved order is OPEN are queued,
-// and each event ID plus order ID/version pair is accepted once. COMPLETED/CANCELED routine updates are ignored.
+// and each Square order ID is claimed, queued, and printed at most once per deduplication TTL.
 // --------------------
+
+function pruneSquareDedup(now = Date.now()) {
+  for (const [orderId, entry] of recentlyProcessedSquareOrders) {
+    if (!entry || entry.expiresAt <= now) recentlyProcessedSquareOrders.delete(orderId);
+  }
+  for (const [orderId, expiresAt] of completedJobSquareOrderIds) {
+    if (expiresAt <= now) completedJobSquareOrderIds.delete(orderId);
+  }
+  while (recentlyProcessedSquareOrders.size > SQUARE_DEDUP_MAX_ENTRIES) {
+    recentlyProcessedSquareOrders.delete(recentlyProcessedSquareOrders.keys().next().value);
+  }
+  while (completedJobSquareOrderIds.size > SQUARE_DEDUP_MAX_ENTRIES) {
+    completedJobSquareOrderIds.delete(completedJobSquareOrderIds.keys().next().value);
+  }
+}
+
+function setSquareDedup(orderId, status) {
+  pruneSquareDedup();
+  recentlyProcessedSquareOrders.set(orderId, { status, expiresAt: Date.now() + SQUARE_DEDUP_TTL_MS });
+}
+
+function getSquareDedupStatus(orderId) {
+  pruneSquareDedup();
+  return recentlyProcessedSquareOrders.get(orderId)?.status || null;
+}
+
+function markSquareCompleted(orderId) {
+  if (!orderId) return;
+  completedJobSquareOrderIds.set(orderId, Date.now() + SQUARE_DEDUP_TTL_MS);
+  setSquareDedup(orderId, "printed");
+}
+
+function queueHasSquareOrderId(queue, orderId) {
+  for (const token of queue.pending) {
+    const job = queue.activeJobs.get(token);
+    if (job?.metadata?.squareOrderId === orderId) return true;
+  }
+  for (const job of queue.activeJobs.values()) {
+    if (job?.metadata?.squareOrderId === orderId) return true;
+  }
+  return false;
+}
+
+function isSquareOrderQueued(orderId) {
+  if (queueHasSquareOrderId({ activeJobs, pending }, orderId)) return true;
+  for (const queue of routeQueues.values()) {
+    if (queueHasSquareOrderId(queue, orderId)) return true;
+  }
+  return false;
+}
+
+function isSquareOrderPrinted(orderId) {
+  pruneSquareDedup();
+  return completedJobSquareOrderIds.has(orderId) || getSquareDedupStatus(orderId) === "printed";
+}
+
+function claimSquareOrder(orderId) {
+  const status = getSquareDedupStatus(orderId);
+  if (status === "processing") { console.log(`SQUARE ORDER ALREADY PROCESSING: ${orderId}`); return false; }
+  if (status === "queued" || isSquareOrderQueued(orderId)) { console.log(`SQUARE ORDER ALREADY QUEUED: ${orderId}`); setSquareDedup(orderId, "queued"); return false; }
+  if (status === "printed" || isSquareOrderPrinted(orderId)) { console.log(`SQUARE ORDER ALREADY PRINTED: ${orderId}`); return false; }
+  console.log(`SQUARE ORDER PROCESSING: ${orderId}`);
+  setSquareDedup(orderId, "processing");
+  return true;
+}
+
+function releaseSquareOrder(orderId) {
+  if (getSquareDedupStatus(orderId) === "processing") recentlyProcessedSquareOrders.delete(orderId);
+}
+
+function formatSquareQuantity(value, fallback = 1) {
+  const n = Number.parseFloat(String(value ?? "").trim());
+  const safe = Number.isFinite(n) && n > 0 ? n : fallback;
+  return Number.isInteger(safe) ? String(safe) : String(Number(safe.toFixed(3)));
+}
+
+function normalizeSquareSource(value) {
+  const text = String(value || "").toLowerCase();
+  if (/uber/.test(text)) return "Uber Eats";
+  if (/door\s*dash|doordash/.test(text)) return "DoorDash";
+  if (/grub\s*hub|grubhub/.test(text)) return "Grubhub";
+  if (/square/.test(text)) return "Square";
+  return null;
+}
+
+function detectSquareSource(order) {
+  const candidates = [
+    order?.source?.name,
+    typeof order?.source === "string" ? order.source : "",
+    order?.application_details?.application_name,
+    order?.application_details?.square_product,
+    order?.ticket_name,
+    order?.reference_id,
+    ...(order?.fulfillments || []).flatMap(f => [f?.type, f?.state, f?.pickup_details?.schedule_type, f?.delivery_details?.courier_pickup_at])
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeSquareSource(candidate);
+    if (normalized) return normalized;
+  }
+  return "Square";
+}
+
+function detectSquareFulfillment(order) {
+  for (const f of order?.fulfillments || []) {
+    if (f?.type === "DELIVERY" || f?.delivery_details) return "Delivery";
+    if (f?.type === "PICKUP" || f?.pickup_details) return "Pickup";
+  }
+  return null;
+}
+
 function getSquareNotificationUrl() {
   return process.env.SQ_URL;
 }
@@ -718,10 +831,10 @@ function getSquareRecipient(order) {
 }
 
 function getSquareOrderType(order) {
-  const { fulfillment } = getSquareFulfillmentDetails(order);
-  if (fulfillment.type === "DELIVERY") return "Square Delivery";
-  if (fulfillment.type === "PICKUP") return "Square Pickup";
-  return "Square Order";
+  const source = detectSquareSource(order);
+  const fulfillmentType = detectSquareFulfillment(order);
+  console.log(`SQUARE SOURCE: ${source} | ${fulfillmentType || "Order"}`);
+  return fulfillmentType ? `${source} ${fulfillmentType}` : `${source} Order`;
 }
 
 function getSquareOrderTime(order) {
@@ -735,10 +848,19 @@ function getSquareOrderNumber(order) {
 
 function parseSquareOrder(order) {
   const { details } = getSquareFulfillmentDetails(order);
-  const items = (order.line_items || []).map((lineItem) => ({
-    item: `${lineItem.quantity || "1"}x ${lineItem.name || "Item"}`,
-    modifiers: (lineItem.modifiers || []).map((modifier) => modifier.name).filter(Boolean)
-  }));
+  const items = (order.line_items || []).map((lineItem) => {
+    const modifierTotals = new Map();
+    for (const modifier of lineItem.modifiers || []) {
+      const name = modifier?.name;
+      if (!name) continue;
+      const qty = Number.parseFloat(formatSquareQuantity(modifier.quantity, 1));
+      modifierTotals.set(name, (modifierTotals.get(name) || 0) + qty);
+    }
+    return {
+      item: `${formatSquareQuantity(lineItem.quantity, 1)}x ${lineItem.name || "Item"}`,
+      modifiers: Array.from(modifierTotals.entries()).map(([name, qty]) => `${formatSquareQuantity(qty, 1)}x ${name}`)
+    };
+  });
 
   const totalItems = String(
     (order.line_items || []).reduce((sum, lineItem) => sum + (Number.parseFloat(lineItem.quantity) || 1), 0)
@@ -778,20 +900,33 @@ function isSquarePrintable(order) {
 async function processSquareOrder(event) {
   const orderId = getSquareOrderId(event);
   if (!orderId) return;
+  if (!claimSquareOrder(orderId)) {
+    console.log(`SQUARE DUPLICATE SKIPPED: ${orderId}`);
+    return;
+  }
 
   try {
     const { order } = await squareApiGet(`/v2/orders/${encodeURIComponent(orderId)}`);
-    if (!isSquarePrintable(order)) return;
+    if (!isSquarePrintable(order)) {
+      releaseSquareOrder(orderId);
+      return;
+    }
 
-    const version = order?.version || getSquareEventOrderVersion(event) || "unknown";
-    const orderVersionKey = `${orderId}:${version}`;
-    if (squareQueuedOrderVersions.has(orderVersionKey)) {
-      console.log("SQUARE DUPLICATE SKIPPED");
+    if (isSquareOrderQueued(orderId)) {
+      console.log(`SQUARE ORDER ALREADY QUEUED: ${orderId}`);
+      setSquareDedup(orderId, "queued");
+      return;
+    }
+    if (isSquareOrderPrinted(orderId)) {
+      console.log(`SQUARE ORDER ALREADY PRINTED: ${orderId}`);
       return;
     }
 
     const route = routeForSquareLocation(order?.location_id);
-    if (!route) return;
+    if (!route) {
+      releaseSquareOrder(orderId);
+      return;
+    }
 
     const parsed = parseSquareOrder(order);
     const jobBuf = buildReceipt(
@@ -804,10 +939,11 @@ async function processSquareOrder(event) {
       parsed.note
     );
 
-    enqueueReceipt(jobBuf, route);
-    squareQueuedOrderVersions.add(orderVersionKey);
+    enqueueReceipt(jobBuf, route, { squareOrderId: orderId, source: "square" });
+    setSquareDedup(orderId, "queued");
     console.log(`SQUARE ORDER QUEUED: ${orderId} -> ${route}`);
   } catch (err) {
+    releaseSquareOrder(orderId);
     console.log("SQUARE ORDER RETRIEVE ERROR", err.message);
   }
 }
@@ -833,11 +969,6 @@ app.post("/sq-webhook", (req, res) => {
     return res.status(400).send("Invalid JSON");
   }
 
-  if (event.event_id && squareSeenEventIds.has(event.event_id)) {
-    console.log("SQUARE DUPLICATE SKIPPED");
-    return res.status(200).send("Duplicate");
-  }
-  if (event.event_id) squareSeenEventIds.add(event.event_id);
 
   res.status(200).send("OK");
 
@@ -905,12 +1036,14 @@ console.log("TEST PRINTER POLLED:", new Date().toISOString());
     console.log("DOWNLOADING JOB:", token);
 
     const job = activeJobs.get(token);
+    const jobBuf = job?.buf || job;
 
     res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
+    res.setHeader("Content-Length", jobBuf.length);
     res.setHeader("Cache-Control", "no-store");
-    res.send(job);
+    res.send(jobBuf);
 
+    if (job?.metadata?.squareOrderId) markSquareCompleted(job.metadata.squareOrderId);
     activeJobs.delete(token);
     pending = pending.filter((t) => t !== token);
 
@@ -961,11 +1094,13 @@ function registerCloudPrntRoute(route) {
     console.log(`JOB DOWNLOADED: ${normalizedRoute} -> ${token}`);
 
     const job = queue.activeJobs.get(token);
+    const jobBuf = job?.buf || job;
     res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", job.length);
+    res.setHeader("Content-Length", jobBuf.length);
     res.setHeader("Cache-Control", "no-store");
-    res.send(job);
+    res.send(jobBuf);
 
+    if (job?.metadata?.squareOrderId) markSquareCompleted(job.metadata.squareOrderId);
     queue.activeJobs.delete(token);
     queue.pending = queue.pending.filter((t) => t !== token);
   });
@@ -973,6 +1108,54 @@ function registerCloudPrntRoute(route) {
 
 registerCloudPrntRoute(process.env.ROUTE_1);
 registerCloudPrntRoute(process.env.ROUTE_2);
+
+
+app.get("/clear", (req, res) => {
+  const clearKey = process.env.CLEAR_KEY;
+  if (!clearKey) return res.status(404).send("Not found");
+  if (req.query.key !== clearKey) return res.status(401).send("Unauthorized");
+
+  let pendingRemoved = pending.length;
+  let activeRemoved = activeJobs.size;
+  pending = [];
+  activeJobs.clear();
+  for (const queue of routeQueues.values()) {
+    pendingRemoved += queue.pending.length;
+    activeRemoved += queue.activeJobs.size;
+    queue.pending = [];
+    queue.activeJobs.clear();
+  }
+  completedJobSquareOrderIds.clear();
+  console.log("ADMIN QUEUES CLEARED");
+
+  if (req.query.resetSquareDedup === "1") {
+    recentlyProcessedSquareOrders.clear();
+    console.log("ADMIN SQUARE DEDUP CLEARED");
+    return res.type("text/plain").send("Queues and Square deduplication cleared.");
+  }
+
+  res.type("text/plain").send(`Queues cleared.\nPending jobs removed: ${pendingRemoved}\nActive jobs removed: ${activeRemoved}\nSquare deduplication retained.`);
+});
+
+app.get("/health", (req, res) => {
+  pruneSquareDedup();
+  const route1 = normalizePrintRoute(process.env.ROUTE_1);
+  const route2 = normalizePrintRoute(process.env.ROUTE_2);
+  const q1 = getRouteQueue(route1);
+  const q2 = getRouteQueue(route2);
+  res.json({
+    ok: true,
+    uptimeSeconds: Math.floor(process.uptime()),
+    queues: {
+      [route1 || "default"]: { pending: q1.pending.length, active: q1.activeJobs.size },
+      [route2 || "default"]: { pending: q2.pending.length, active: q2.activeJobs.size }
+    },
+    square: {
+      recentlyProcessedCount: recentlyProcessedSquareOrders.size,
+      processingCount: Array.from(recentlyProcessedSquareOrders.values()).filter(e => e.status === "processing").length
+    }
+  });
+});
 
   app.get("/", (req,res)=>{
   res.send("OK");
@@ -1056,4 +1239,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, recentlyProcessedSquareOrders };
