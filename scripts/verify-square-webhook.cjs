@@ -2,7 +2,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const http = require('http');
 
-process.env.TEST_ALWAYS_OPEN = '1';
+process.env.EMAIL_POLL_MS = '1000';
 process.env.SQ_TOKEN = 'test-token';
 process.env.SQ_LOCATION_1 = 'loc-1';
 process.env.SQ_LOCATION_2 = 'loc-2';
@@ -17,7 +17,7 @@ process.env.CLIENT_ID = 'test';
 process.env.CLIENT_SECRET = 'test';
 process.env.REFRESH_TOKEN = 'test';
 
-const { app, parseSquareOrder, buildReceipt, enqueueReceipt, printerPollState, checkPollingStatus } = require('../server.cjs');
+const { app, parseSquareOrder, buildReceipt, enqueueReceipt, printerPollState, checkPollingStatus, parseGrubHub, EMAIL_POLL_MS, PRINTER_POLL_SECONDS } = require('../server.cjs');
 
 const server = app.listen(0);
 const port = server.address().port;
@@ -74,15 +74,30 @@ async function drain(route) {
   return p;
 }
 async function assertNoJobs() {
-  assert.strictEqual((await poll('print1')).json.jobReady, false);
-  assert.strictEqual((await poll('print2')).json.jobReady, false);
+  const p1 = await poll('print1');
+  const p2 = await poll('print2');
+  assert.strictEqual(p1.json.jobReady, false);
+  assert.strictEqual(p2.json.jobReady, false);
+  assert.strictEqual(p1.json.nextPollInterval, PRINTER_POLL_SECONDS);
+  assert.strictEqual(p2.json.nextPollInterval, PRINTER_POLL_SECONDS);
 }
 
 (async () => {
   try {
     assert.strictEqual((await request('GET', '/')).body.toString(), 'OK');
+    assert.strictEqual(EMAIL_POLL_MS, 1000);
+    assert.strictEqual(PRINTER_POLL_SECONDS, 5);
+    const serverSource = require('fs').readFileSync(require('path').join(__dirname, '..', 'server.cjs'), 'utf8');
+    assert.doesNotMatch(serverSource, /function\s+isBusinessHours|isBusinessHours\s*\(|openTime|closeTime|TEST_ALWAYS_OPEN|43200|stopEmailPolling|businessHours/);
+    assert.match(serverSource, /startEmailPolling\(\);/);
     assert.strictEqual((await request('GET', '/sq-webhook')).body.toString(), 'Square webhook route is live');
     assert.strictEqual((await postSquare(event('bad', 'bad'), order('loc-1', 'bad'), 'bad')).status, 403);
+
+    let healthBeforeEmail = JSON.parse((await request('GET', '/health')).body.toString());
+    await sleep(1100);
+    let healthAfterEmail = JSON.parse((await request('GET', '/health')).body.toString());
+    assert.ok(healthAfterEmail.lastEmailPollAt > healthBeforeEmail.lastEmailPollAt);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(healthAfterEmail, 'businessHours'), false);
 
     let parsed = parseSquareOrder(order('loc-1').order);
     assert.deepStrictEqual(parsed.items[0].modifiers, ['1x Glazed', '3x Vanilla Iced']);
@@ -95,6 +110,10 @@ async function assertNoJobs() {
     assert.strictEqual(parsed.orderType, 'DoorDash Pickup');
     parsed = parseSquareOrder(order('loc-1', 's3', { source: { name: 'Grubhub' }, fulfillments: [{ type: 'DELIVERY', delivery_details: {} }] }).order);
     assert.strictEqual(parsed.orderType, 'GrubHub Delivery');
+    const ghParsed = parseGrubHub('<html><body><div>Deliver to:</div><div>Pat Customer</div><table><tr><td>2</td><td>x</td><td>Burger</td></tr><tr><td colspan=3><ul><li>Cheese</li><li>Cheese</li></ul></td></tr></table></body></html>');
+    assert.strictEqual(ghParsed.customer, 'Pat Customer');
+    assert.strictEqual(ghParsed.orderType, 'GrubHub Delivery');
+    assert.deepStrictEqual(ghParsed.items, [{ item: '2x Burger', modifiers: ['2x Cheese'] }]);
 
     let body = event('evt-same-a', 'order-same');
     const routeLogs = [];
@@ -104,6 +123,7 @@ async function assertNoJobs() {
     await sleep(50);
     let p = await poll('print1');
     assert.strictEqual(p.json.jobReady, true);
+    assert.strictEqual(p.json.nextPollInterval, PRINTER_POLL_SECONDS);
     const sameToken = p.json.jobToken;
     assert.match(routeLogs.join('\n'), new RegExp(`SQUARE ORDER QUEUED: order-same -> #1`));
     assert.match(routeLogs.join('\n'), new RegExp(`JOB READY: #1 -> ${sameToken}`));
@@ -117,7 +137,9 @@ async function assertNoJobs() {
 
     await postSquare(event('evt-created', 'order-flow', 'order.created'), order('loc-1', 'order-flow'));
     await sleep(50);
-    assert.strictEqual((await drain('print1')).json.jobReady, true);
+    const drainedPrint1 = await drain('print1');
+    assert.strictEqual(drainedPrint1.json.jobReady, true);
+    assert.strictEqual(drainedPrint1.json.nextPollInterval, PRINTER_POLL_SECONDS);
     await postSquare(event('evt-updated-ignored', 'order-updated-only', 'order.updated'), order('loc-1', 'order-updated-only'));
     await sleep(50);
     await assertNoJobs();
@@ -131,7 +153,9 @@ async function assertNoJobs() {
     ]);
     await sleep(50);
     assert.strictEqual((await poll('print1')).json.jobReady, false);
-    assert.strictEqual((await drain('print2')).json.jobReady, true);
+    const drainedPrint2 = await drain('print2');
+    assert.strictEqual(drainedPrint2.json.jobReady, true);
+    assert.strictEqual(drainedPrint2.json.nextPollInterval, PRINTER_POLL_SECONDS);
 
     await postSquare(event('evt-clear', 'order-clear'), order('loc-1', 'order-clear'));
     await sleep(50);
@@ -189,6 +213,14 @@ async function assertNoJobs() {
     await postSquare(event('evt-fail-retry', 'order-fail'), order('loc-1', 'order-fail'));
     await sleep(50);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
+
+    const defaultToken = enqueueReceipt(buildReceipt('c', 'DoorDash Pickup', '', '1', [{ item: '1x Default', modifiers: [] }]), '', { source: 'DoorDash', orderType: 'Pickup' });
+    const defaultPoll = await request('POST', '/starcloudprint', '{}', { 'content-type': 'application/json' });
+    const defaultJson = JSON.parse(defaultPoll.body.toString('utf8'));
+    assert.strictEqual(defaultJson.jobReady, true);
+    assert.strictEqual(defaultJson.jobToken, defaultToken);
+    assert.strictEqual(defaultJson.nextPollInterval, PRINTER_POLL_SECONDS);
+    await request('GET', `/starcloudprint?token=${encodeURIComponent(defaultToken)}`);
 
     // Queue view is protected and chronological, uses only #1/#2, and remove only removes selected item.
     assert.strictEqual((await request('GET', '/v?key=bad')).status, 401);
