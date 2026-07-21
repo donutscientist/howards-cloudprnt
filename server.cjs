@@ -33,21 +33,19 @@ app.use(express.raw({ type: "*/*" }));
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
 // --------------------
-let activeJobs = new Map(); // token -> Buffer
+let activeJobs = new Map(); // token -> { buf, metadata }
 let pending = [];           // tokens FIFO
 
 const routeQueues = new Map(); // route -> { activeJobs, pending }
 const SQUARE_DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 const SQUARE_DEDUP_MAX_ENTRIES = 5000;
-const recentlyProcessedSquareOrders = new Map(); // orderId -> { status, expiresAt }
-const completedJobSquareOrderIds = new Map(); // orderId -> expiresAt
-
+const queuedSquareOrders = new Map(); // orderId -> expiresAt, set only after successful queue add
+const removalIdToJob = new Map(); // removalId -> { route, token }
+const routeLabels = new Map();
+const printerPollState = new Map();
 
 let lastEmailPollAt = Date.now();
-let lastPrinterPollAt = Date.now();
-
 let emailStoppedLogged = false;
-let printerStoppedLogged = false;
 
 function normalizePrintRoute(route) {
   const raw = String(route || "").trim();
@@ -63,18 +61,32 @@ function getRouteQueue(route) {
   return routeQueues.get(normalized);
 }
 
+function createSafeId() {
+  return crypto.randomBytes(8).toString("hex");
+}
+
 function enqueueReceipt(jobBuf, route = "", metadata = {}) {
-  const id = Math.random().toString(36).substring(2,10);
+  const id = createSafeId();
   const normalizedRoute = normalizePrintRoute(route);
+  const safeMetadata = {
+    createdAt: metadata.createdAt || new Date().toISOString(),
+    routeLabel: metadata.routeLabel || routeLabelForRoute(normalizedRoute) || "#1",
+    source: metadata.source || "Unknown",
+    orderType: metadata.orderType || "Unknown",
+    squareOrderId: metadata.squareOrderId || "",
+    removalId: metadata.removalId || createSafeId()
+  };
+  const job = { buf: jobBuf, metadata: safeMetadata };
 
   if (normalizedRoute) {
     const queue = getRouteQueue(normalizedRoute);
-    queue.activeJobs.set(id, { buf: jobBuf, metadata });
+    queue.activeJobs.set(id, job);
     queue.pending.push(id);
   } else {
-    activeJobs.set(id, { buf: jobBuf, metadata });
+    activeJobs.set(id, job);
     pending.push(id);
   }
+  removalIdToJob.set(safeMetadata.removalId, { route: normalizedRoute, token: id });
 
   console.log("QUEUE ADDED:", id);
 
@@ -591,7 +603,7 @@ if (platform === "DD") {
       parsed.note
     );
 
-    enqueueReceipt(jobBuf);
+    enqueueReceipt(jobBuf, "", { source: platform === "GH" ? "GrubHub" : "DoorDash", orderType: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup" });
 
     await gmail.users.messages.modify({
       userId: "me",
@@ -608,77 +620,27 @@ if (platform === "DD") {
 
 // --------------------
 // SQUARE WEBHOOK ORDER PRINTING
-// Printable rule: only order.created/order.updated events whose retrieved order is OPEN are queued,
-// and each Square order ID is claimed, queued, and printed at most once per deduplication TTL.
+// Printable rule: order.created events queue open orders once per 24 hours after queue success.
 // --------------------
 
 function pruneSquareDedup(now = Date.now()) {
-  for (const [orderId, entry] of recentlyProcessedSquareOrders) {
-    if (!entry || entry.expiresAt <= now) recentlyProcessedSquareOrders.delete(orderId);
+  for (const [orderId, expiresAt] of queuedSquareOrders) {
+    if (expiresAt <= now) queuedSquareOrders.delete(orderId);
   }
-  for (const [orderId, expiresAt] of completedJobSquareOrderIds) {
-    if (expiresAt <= now) completedJobSquareOrderIds.delete(orderId);
-  }
-  while (recentlyProcessedSquareOrders.size > SQUARE_DEDUP_MAX_ENTRIES) {
-    recentlyProcessedSquareOrders.delete(recentlyProcessedSquareOrders.keys().next().value);
-  }
-  while (completedJobSquareOrderIds.size > SQUARE_DEDUP_MAX_ENTRIES) {
-    completedJobSquareOrderIds.delete(completedJobSquareOrderIds.keys().next().value);
+  while (queuedSquareOrders.size > SQUARE_DEDUP_MAX_ENTRIES) {
+    queuedSquareOrders.delete(queuedSquareOrders.keys().next().value);
   }
 }
 
-function setSquareDedup(orderId, status) {
+function hasQueuedSquareOrder(orderId) {
   pruneSquareDedup();
-  recentlyProcessedSquareOrders.set(orderId, { status, expiresAt: Date.now() + SQUARE_DEDUP_TTL_MS });
+  return queuedSquareOrders.has(orderId);
 }
 
-function getSquareDedupStatus(orderId) {
-  pruneSquareDedup();
-  return recentlyProcessedSquareOrders.get(orderId)?.status || null;
-}
-
-function markSquareCompleted(orderId) {
+function markSquareQueued(orderId) {
   if (!orderId) return;
-  completedJobSquareOrderIds.set(orderId, Date.now() + SQUARE_DEDUP_TTL_MS);
-  setSquareDedup(orderId, "printed");
-}
-
-function queueHasSquareOrderId(queue, orderId) {
-  for (const token of queue.pending) {
-    const job = queue.activeJobs.get(token);
-    if (job?.metadata?.squareOrderId === orderId) return true;
-  }
-  for (const job of queue.activeJobs.values()) {
-    if (job?.metadata?.squareOrderId === orderId) return true;
-  }
-  return false;
-}
-
-function isSquareOrderQueued(orderId) {
-  if (queueHasSquareOrderId({ activeJobs, pending }, orderId)) return true;
-  for (const queue of routeQueues.values()) {
-    if (queueHasSquareOrderId(queue, orderId)) return true;
-  }
-  return false;
-}
-
-function isSquareOrderPrinted(orderId) {
   pruneSquareDedup();
-  return completedJobSquareOrderIds.has(orderId) || getSquareDedupStatus(orderId) === "printed";
-}
-
-function claimSquareOrder(orderId) {
-  const status = getSquareDedupStatus(orderId);
-  if (status === "processing") { console.log(`SQUARE ORDER ALREADY PROCESSING: ${orderId}`); return false; }
-  if (status === "queued" || isSquareOrderQueued(orderId)) { console.log(`SQUARE ORDER ALREADY QUEUED: ${orderId}`); setSquareDedup(orderId, "queued"); return false; }
-  if (status === "printed" || isSquareOrderPrinted(orderId)) { console.log(`SQUARE ORDER ALREADY PRINTED: ${orderId}`); return false; }
-  console.log(`SQUARE ORDER PROCESSING: ${orderId}`);
-  setSquareDedup(orderId, "processing");
-  return true;
-}
-
-function releaseSquareOrder(orderId) {
-  if (getSquareDedupStatus(orderId) === "processing") recentlyProcessedSquareOrders.delete(orderId);
+  queuedSquareOrders.set(orderId, Date.now() + SQUARE_DEDUP_TTL_MS);
 }
 
 function formatSquareQuantity(value, fallback = 1) {
@@ -689,10 +651,9 @@ function formatSquareQuantity(value, fallback = 1) {
 
 function normalizeSquareSource(value) {
   const text = String(value || "").toLowerCase();
-  if (/uber/.test(text)) return "Uber Eats";
+  if (/uber\s*eats|ubereats|uber/.test(text)) return "UberEats";
   if (/door\s*dash|doordash/.test(text)) return "DoorDash";
-  if (/grub\s*hub|grubhub/.test(text)) return "Grubhub";
-  if (/square/.test(text)) return "Square";
+  if (/grub\s*hub|grubhub/.test(text)) return "GrubHub";
   return null;
 }
 
@@ -710,7 +671,7 @@ function detectSquareSource(order) {
     const normalized = normalizeSquareSource(candidate);
     if (normalized) return normalized;
   }
-  return "Square";
+  return "Online Order";
 }
 
 function detectSquareFulfillment(order) {
@@ -757,7 +718,7 @@ function logSquareApiError({ requestUrl, statusCode, responseBody }) {
   console.error("Square Orders API request failed", {
     requestUrl,
     status: statusCode,
-    responseBody,
+    safeDetail: String(squareError?.detail || responseBody || "").slice(0, 180),
     squareErrorCode: squareError?.code,
     squareErrorCategory: squareError?.category,
     squareErrorDetail: squareError?.detail
@@ -805,16 +766,7 @@ function squareApiGet(path) {
 }
 
 function getSquareOrderId(event) {
-  return event?.data?.object?.order_created?.order_id ||
-    event?.data?.object?.order_updated?.order_id ||
-    event?.data?.object?.order?.id ||
-    event?.data?.id;
-}
-
-function getSquareEventOrderVersion(event) {
-  return event?.data?.object?.order_updated?.version ||
-    event?.data?.object?.order_created?.version ||
-    event?.data?.object?.order?.version;
+  return event?.data?.object?.order_created?.order_id || event?.data?.object?.order?.id || event?.data?.id;
 }
 
 function getSquareFulfillmentDetails(order) {
@@ -827,14 +779,13 @@ function getSquareFulfillmentDetails(order) {
 
 function getSquareRecipient(order) {
   const { details } = getSquareFulfillmentDetails(order);
-  return details?.recipient?.display_name || order.ticket_name || order.customer_id || "Square";
+  return details?.recipient?.display_name || order.ticket_name || order.customer_id || "Online Order";
 }
 
 function getSquareOrderType(order) {
   const source = detectSquareSource(order);
-  const fulfillmentType = detectSquareFulfillment(order);
-  console.log(`SQUARE SOURCE: ${source} | ${fulfillmentType || "Order"}`);
-  return fulfillmentType ? `${source} ${fulfillmentType}` : `${source} Order`;
+  const fulfillmentType = detectSquareFulfillment(order) || "Pickup";
+  return `${source} ${fulfillmentType}`;
 }
 
 function getSquareOrderTime(order) {
@@ -867,7 +818,8 @@ function parseSquareOrder(order) {
   );
 
   const notes = [order.note, details.note].filter(Boolean).join(" / ");
-  const source = order.source?.name ? `Source: ${order.source.name}` : "";
+  const source = detectSquareSource(order);
+  const fulfillmentType = detectSquareFulfillment(order) || "Pickup";
 
   return {
     customer: getSquareRecipient(order),
@@ -876,7 +828,9 @@ function parseSquareOrder(order) {
     totalItems,
     items,
     estimate: getSquareOrderTime(order),
-    note: [notes, source].filter(Boolean).join(" / ")
+    note: notes,
+    source,
+    fulfillmentType
   };
 }
 
@@ -897,54 +851,69 @@ function isSquarePrintable(order) {
   return (order?.state || order?.status || "OPEN") === "OPEN";
 }
 
+function safeSquareError(err) {
+  return String(err?.message || err || "unknown").replace(/Bearer\s+\S+/ig, "Bearer [redacted]").slice(0, 180);
+}
+
 async function processSquareOrder(event) {
   const orderId = getSquareOrderId(event);
-  if (!orderId) return;
-  if (!claimSquareOrder(orderId)) {
-    console.log(`SQUARE DUPLICATE SKIPPED: ${orderId}`);
+  if (!orderId) {
+    console.log("SQUARE ORDER ID MISSING");
     return;
   }
+  if (hasQueuedSquareOrder(orderId)) {
+    console.log(`SQUARE ORDER ALREADY QUEUED: ${orderId}`);
+    return;
+  }
+  console.log(`SQUARE ORDER PROCESSING: ${orderId}`);
 
   try {
-    const { order } = await squareApiGet(`/v2/orders/${encodeURIComponent(orderId)}`);
+    let order;
+    try {
+      ({ order } = await squareApiGet(`/v2/orders/${encodeURIComponent(orderId)}`));
+    } catch (err) {
+      console.log(`SQUARE ORDER RETRIEVE FAILED: ${safeSquareError(err)}`);
+      return;
+    }
+    if (!order) {
+      console.log("SQUARE ORDER RETRIEVE FAILED: missing order");
+      return;
+    }
     if (!isSquarePrintable(order)) {
-      releaseSquareOrder(orderId);
-      return;
-    }
-
-    if (isSquareOrderQueued(orderId)) {
-      console.log(`SQUARE ORDER ALREADY QUEUED: ${orderId}`);
-      setSquareDedup(orderId, "queued");
-      return;
-    }
-    if (isSquareOrderPrinted(orderId)) {
-      console.log(`SQUARE ORDER ALREADY PRINTED: ${orderId}`);
+      console.log(`SQUARE ORDER NOT PRINTABLE: ${order.state || order.status || "state unknown"}`);
       return;
     }
 
     const route = routeForSquareLocation(order?.location_id);
-    if (!route) {
-      releaseSquareOrder(orderId);
+    if (!route) return;
+    const routeLabel = route === normalizePrintRoute(process.env.ROUTE_2) ? "#2" : "#1";
+
+    let parsed;
+    let jobBuf;
+    try {
+      parsed = parseSquareOrder(order);
+      console.log(`SQUARE ORDER: ${parsed.source} | ${parsed.fulfillmentType} | ${routeLabel}`);
+      jobBuf = buildReceipt(parsed.customer, parsed.orderType, parsed.phone, parsed.totalItems, parsed.items, parsed.estimate, parsed.note);
+    } catch (err) {
+      console.log("SQUARE RECEIPT BUILD FAILED");
       return;
     }
 
-    const parsed = parseSquareOrder(order);
-    const jobBuf = buildReceipt(
-      parsed.customer,
-      parsed.orderType,
-      parsed.phone,
-      parsed.totalItems,
-      parsed.items,
-      parsed.estimate,
-      parsed.note
-    );
-
-    enqueueReceipt(jobBuf, route, { squareOrderId: orderId, source: "square" });
-    setSquareDedup(orderId, "queued");
-    console.log(`SQUARE ORDER QUEUED: ${orderId} -> ${route}`);
+    try {
+      enqueueReceipt(jobBuf, route, {
+        squareOrderId: orderId,
+        routeLabel,
+        source: parsed.source,
+        orderType: parsed.fulfillmentType
+      });
+      markSquareQueued(orderId);
+    } catch (err) {
+      console.log("SQUARE QUEUE FAILED");
+      return;
+    }
+    console.log(`SQUARE ORDER QUEUED: ${orderId}`);
   } catch (err) {
-    releaseSquareOrder(orderId);
-    console.log("SQUARE ORDER RETRIEVE ERROR", err.message);
+    console.log(`SQUARE PROCESSING FAILED: ${safeSquareError(err)}`);
   }
 }
 
@@ -972,8 +941,10 @@ app.post("/sq-webhook", (req, res) => {
 
   res.status(200).send("OK");
 
-  if (["order.created", "order.updated"].includes(event.type)) {
+  if (event.type === "order.created") {
     processSquareOrder(event);
+  } else {
+    console.log(`SQUARE EVENT IGNORED: ${event.type}`);
   }
 });
 
@@ -981,34 +952,18 @@ app.post("/sq-webhook", (req, res) => {
 // ADVANCED CLOUDPRNT ENDPOINTS
 // --------------------
 
-  app.post("/starcloudprint", (req, res) => {
-
-  if (printerStoppedLogged) {
-  console.log("Printer polling resumes");
-}
-
-lastPrinterPollAt = Date.now();
-printerStoppedLogged = false;
-
+app.post("/starcloudprint", (req, res) => {
+  notePrinterPoll("");
   const isOpen = isBusinessHours();
-
-  const pollInterval = isOpen
-    ? 5
-    : 43200; // 12 hours
+  const pollInterval = isOpen ? 5 : 43200;
 
   if (!isOpen) {
-    return res.json({
-      jobReady: false,
-      nextPollInterval: pollInterval
-    });
+    return res.json({ jobReady: false, nextPollInterval: pollInterval });
   }
 
   if (pending.length > 0) {
-
     const next = pending[0];
-
-    console.log("JOB READY ->", next);
-
+    console.log(`JOB READY: ${routeLabelForRoute("")} -> ${next}`);
     return res.json({
       jobReady: true,
       mediaTypes: ["application/vnd.star.starprnt"],
@@ -1018,37 +973,61 @@ printerStoppedLogged = false;
     });
   }
 
-  res.json({
-    jobReady: false,
-    nextPollInterval: pollInterval
-  });
-
+  res.json({ jobReady: false, nextPollInterval: pollInterval });
 });
 
-  app.get("/starcloudprint", (req, res) => {
-console.log("TEST PRINTER POLLED:", new Date().toISOString());
-    const token = req.query.token || req.query.jobToken || req.query.jobid;
+app.get("/starcloudprint", (req, res) => {
+  const token = req.query.token || req.query.jobToken || req.query.jobid;
 
-    if (!token || !activeJobs.has(token)) {
-      return res.status(204).send();
-    }
+  if (!token || !activeJobs.has(token)) {
+    return res.status(204).send();
+  }
 
-    console.log("DOWNLOADING JOB:", token);
+  console.log(`JOB DOWNLOADED: ${routeLabelForRoute("")} -> ${token}`);
 
-    const job = activeJobs.get(token);
-    const jobBuf = job?.buf || job;
+  const job = activeJobs.get(token);
+  const jobBuf = job?.buf || job;
 
-    res.setHeader("Content-Type", "application/vnd.star.starprnt");
-    res.setHeader("Content-Length", jobBuf.length);
-    res.setHeader("Cache-Control", "no-store");
-    res.send(jobBuf);
+  res.setHeader("Content-Type", "application/vnd.star.starprnt");
+  res.setHeader("Content-Length", jobBuf.length);
+  res.setHeader("Cache-Control", "no-store");
+  res.send(jobBuf);
 
-    if (job?.metadata?.squareOrderId) markSquareCompleted(job.metadata.squareOrderId);
-    activeJobs.delete(token);
-    pending = pending.filter((t) => t !== token);
+  if (job?.metadata?.removalId) removalIdToJob.delete(job.metadata.removalId);
+  activeJobs.delete(token);
+  pending = pending.filter((t) => t !== token);
+});
 
-  });
 
+
+
+function routeLabelForRoute(route) {
+  const normalized = normalizePrintRoute(route);
+  if (normalized === normalizePrintRoute(process.env.ROUTE_2)) return "#2";
+  if (normalized === normalizePrintRoute(process.env.ROUTE_1)) return "#1";
+  return routeLabels.get(normalized) || "#1";
+}
+
+function notePrinterPoll(route) {
+  const label = routeLabelForRoute(route);
+  const state = printerPollState.get(label) || { online: false, lastPollAt: 0, stoppedLogged: false };
+  state.lastPollAt = Date.now();
+  if (!state.online) console.log(`Printer polling connected: ${label} - ${new Date().toISOString()}`);
+  state.online = true;
+  state.stoppedLogged = false;
+  printerPollState.set(label, state);
+}
+
+function removeJobByToken(route, token) {
+  const queue = route ? getRouteQueue(route) : { activeJobs, pending };
+  const job = queue.activeJobs.get(token);
+  if (!job) return false;
+  queue.activeJobs.delete(token);
+  queue.pending = queue.pending.filter((t) => t !== token);
+  if (!route) pending = queue.pending;
+  if (job?.metadata?.removalId) removalIdToJob.delete(job.metadata.removalId);
+  return job;
+}
 
 function registerCloudPrntRoute(route) {
   const normalizedRoute = normalizePrintRoute(route);
@@ -1056,10 +1035,7 @@ function registerCloudPrntRoute(route) {
   const path = `/${normalizedRoute}`;
 
   app.post(path, (req, res) => {
-    console.log(`PRINTER POLLED: ${normalizedRoute}`);
-
-    lastPrinterPollAt = Date.now();
-    printerStoppedLogged = false;
+    notePrinterPoll(normalizedRoute);
 
     const isOpen = isBusinessHours();
     const pollInterval = isOpen ? 5 : 43200;
@@ -1070,7 +1046,7 @@ function registerCloudPrntRoute(route) {
     const queue = getRouteQueue(normalizedRoute);
     if (queue.pending.length > 0) {
       const next = queue.pending[0];
-      console.log(`JOB READY: ${normalizedRoute} -> ${next}`);
+      console.log(`JOB READY: ${routeLabelForRoute(normalizedRoute)} -> ${next}`);
       return res.json({
         jobReady: true,
         mediaTypes: ["application/vnd.star.starprnt"],
@@ -1091,7 +1067,7 @@ function registerCloudPrntRoute(route) {
       return res.status(204).send();
     }
 
-    console.log(`JOB DOWNLOADED: ${normalizedRoute} -> ${token}`);
+    console.log(`JOB DOWNLOADED: ${routeLabelForRoute(normalizedRoute)} -> ${token}`);
 
     const job = queue.activeJobs.get(token);
     const jobBuf = job?.buf || job;
@@ -1100,15 +1076,77 @@ function registerCloudPrntRoute(route) {
     res.setHeader("Cache-Control", "no-store");
     res.send(jobBuf);
 
-    if (job?.metadata?.squareOrderId) markSquareCompleted(job.metadata.squareOrderId);
+    if (job?.metadata?.removalId) removalIdToJob.delete(job.metadata.removalId);
     queue.activeJobs.delete(token);
     queue.pending = queue.pending.filter((t) => t !== token);
   });
 }
 
+routeLabels.set(normalizePrintRoute(process.env.ROUTE_1), "#1");
+routeLabels.set(normalizePrintRoute(process.env.ROUTE_2), "#2");
 registerCloudPrntRoute(process.env.ROUTE_1);
 registerCloudPrntRoute(process.env.ROUTE_2);
 
+
+function htmlEscape(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function pendingQueueRows() {
+  const rows = [];
+  const addRows = (route, queue) => {
+    for (const token of queue.pending) {
+      const job = queue.activeJobs.get(token);
+      const metadata = job?.metadata || {};
+      rows.push({
+        createdAt: metadata.createdAt || new Date(0).toISOString(),
+        routeLabel: metadata.routeLabel || routeLabelForRoute(route),
+        source: metadata.source || "Unknown",
+        orderType: metadata.orderType || "Unknown",
+        removalId: metadata.removalId || ""
+      });
+    }
+  };
+  addRows("", { activeJobs, pending });
+  for (const [route, queue] of routeQueues) addRows(route, queue);
+  rows.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return rows;
+}
+
+function businessDateParts(iso) {
+  const date = new Date(iso);
+  return {
+    date: date.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" }),
+    time: date.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })
+  };
+}
+
+app.get("/v", (req, res) => {
+  const clearKey = process.env.CLEAR_KEY;
+  if (!clearKey) return res.status(404).send("Not found");
+  if (req.query.key !== clearKey) return res.status(401).send("Unauthorized");
+
+  const rows = pendingQueueRows().map((row, index) => {
+    const when = businessDateParts(row.createdAt);
+    return `<tr><td>${index + 1}</td><td>${htmlEscape(row.routeLabel)}</td><td>${htmlEscape(when.date)}</td><td>${htmlEscape(when.time)}</td><td>${htmlEscape(row.source)}</td><td>${htmlEscape(row.orderType)}</td><td><form method="post" action="/queue/remove" onsubmit="return confirm('Remove this order from the queue?')"><input type="hidden" name="key" value="${htmlEscape(clearKey)}"><input type="hidden" name="id" value="${htmlEscape(row.removalId)}"><button type="submit">Remove</button></form></td></tr>`;
+  }).join("");
+
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Queue</title><style>body{font-family:Arial,sans-serif;margin:1rem}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}button{padding:.5rem}</style></head><body><h1>Waiting Orders</h1><table><thead><tr><th>Sequence</th><th>#</th><th>Date</th><th>Time</th><th>Order Source</th><th>Order Type</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No waiting orders</td></tr>'}</tbody></table></body></html>`);
+});
+
+app.post("/queue/remove", express.urlencoded({ extended: false }), (req, res) => {
+  const clearKey = process.env.CLEAR_KEY;
+  if (!clearKey) return res.status(404).send("Not found");
+  const parsedBody = Buffer.isBuffer(req.body) ? Object.fromEntries(new URLSearchParams(req.body.toString("utf8"))) : (req.body || {});
+  if (parsedBody.key !== clearKey && req.query.key !== clearKey) return res.status(401).send("Unauthorized");
+  const id = parsedBody.id || req.query.id;
+  const entry = removalIdToJob.get(id);
+  if (entry) {
+    const job = removeJobByToken(entry.route, entry.token);
+    if (job) console.log(`QUEUE ITEM REMOVED: ${job.metadata?.routeLabel || routeLabelForRoute(entry.route)}`);
+  }
+  res.redirect(`/v?key=${encodeURIComponent(clearKey)}`);
+});
 
 app.get("/clear", (req, res) => {
   const clearKey = process.env.CLEAR_KEY;
@@ -1125,11 +1163,11 @@ app.get("/clear", (req, res) => {
     queue.pending = [];
     queue.activeJobs.clear();
   }
-  completedJobSquareOrderIds.clear();
+  removalIdToJob.clear();
   console.log("ADMIN QUEUES CLEARED");
 
-  if (req.query.resetSquareDedup === "1") {
-    recentlyProcessedSquareOrders.clear();
+  if (req.query.resetSquare === "1") {
+    queuedSquareOrders.clear();
     console.log("ADMIN SQUARE DEDUP CLEARED");
     return res.type("text/plain").send("Queues and Square deduplication cleared.");
   }
@@ -1151,8 +1189,7 @@ app.get("/health", (req, res) => {
       [route2 || "default"]: { pending: q2.pending.length, active: q2.activeJobs.size }
     },
     square: {
-      recentlyProcessedCount: recentlyProcessedSquareOrders.size,
-      processingCount: Array.from(recentlyProcessedSquareOrders.values()).filter(e => e.status === "processing").length
+      queuedCount: queuedSquareOrders.size
     }
   });
 });
@@ -1206,32 +1243,23 @@ setInterval(() => {
 if (isBusinessHours()) {
   startEmailPolling();
 }
-setInterval(() => {
-  if (pending.length > 50) {
-    console.log("🧹 CLEANING QUEUE");
-    pending = pending.slice(-20);
-  }
-}, 60000);
-
-setInterval(() => {
-  const now = Date.now();
-
+function checkPollingStatus(now = Date.now()) {
   if (!emailStoppedLogged && now - lastEmailPollAt > 5 * 60 * 1000) {
     console.log("email has stopped polling 5 minutes ago");
     emailStoppedLogged = true;
   }
-
-  if (!printerStoppedLogged && now - lastPrinterPollAt > 5 * 60 * 1000) {
-    console.log("printer has stopped polling 5 minutes ago");
-    printerStoppedLogged = true;
+  for (const [label, state] of printerPollState) {
+    if (state.online && !state.stoppedLogged && now - state.lastPollAt > 5 * 60 * 1000) {
+      console.log(`Printer stops polling 5 minutes ago: ${label} - ${new Date().toISOString()}`);
+      state.online = false;
+      state.stoppedLogged = true;
+    }
   }
-}, 30000);
+  pruneSquareDedup(now);
+}
 
-app.get("/restart", (req, res) => {
-  console.log("MANUAL RESTART TEST");
-  res.send("Restart test triggered...");
-  setTimeout(() => process.exit(0), 1000);
-});
+setInterval(() => checkPollingStatus(), 30000);
+
 
 if (require.main === module) {
   app.listen(process.env.PORT || 3000, () => {
@@ -1239,4 +1267,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, recentlyProcessedSquareOrders };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus };
