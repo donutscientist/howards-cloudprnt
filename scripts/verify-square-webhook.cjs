@@ -12,6 +12,7 @@ process.env.SQ_SIGNATURE = 'test-signature-key';
 process.env.SQ_URL = 'https://howards-cloudprnt.onrender.com/sq-webhook';
 process.env.SQ_ENVIRONMENT = 'sandbox';
 process.env.CLEAR_KEY = 'clear-test-key';
+process.env.BUSINESS_TZ = 'America/Chicago';
 process.env.CLIENT_ID = 'test';
 process.env.CLIENT_SECRET = 'test';
 process.env.REFRESH_TOKEN = 'test';
@@ -105,12 +106,12 @@ async function assertNoJobs() {
     await request('GET', `/print1?token=${sameToken}`);
     await assertNoJobs();
 
-    await Promise.all([
-      postSquare(event('evt-created', 'order-flow', 'order.created'), order('loc-1', 'order-flow')),
-      postSquare(event('evt-updated', 'order-flow', 'order.updated'), order('loc-1', 'order-flow'))
-    ]);
+    await postSquare(event('evt-created', 'order-flow', 'order.created'), order('loc-1', 'order-flow'));
     await sleep(50);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
+    await postSquare(event('evt-updated-ignored', 'order-updated-only', 'order.updated'), order('loc-1', 'order-updated-only'));
+    await sleep(50);
+    await assertNoJobs();
     await postSquare(event('evt-retry', 'order-flow', 'order.created'), order('loc-1', 'order-flow'));
     await sleep(50);
     await assertNoJobs();
@@ -146,6 +147,18 @@ async function assertNoJobs() {
     assert.strictEqual((await poll('print1')).json.jobReady, false);
     assert.strictEqual((await drain('print2')).json.jobReady, true);
 
+    // Square DRAFT orders are printable, visible on /v immediately, and removed after download.
+    assert.strictEqual((await postSquare(event('evt-draft', 'order-draft'), order('loc-1', 'order-draft', { state: 'DRAFT' }))).status, 200);
+    await sleep(50);
+    const draftView = await request('GET', `/v?key=${process.env.CLEAR_KEY}`);
+    assert.strictEqual(draftView.status, 200);
+    assert.match(draftView.body.toString(), /<th>Shop<\/th><th>Date<\/th><th>Time<\/th><th>Source<\/th><th>Type<\/th><th>Action<\/th>/);
+    assert.doesNotMatch(draftView.body.toString(), /<th>Sequence<\/th>/);
+    assert.match(draftView.body.toString(), />#1</);
+    assert.strictEqual((await drain('print1')).json.jobReady, true);
+    const draftGoneView = await request('GET', `/v?key=${process.env.CLEAR_KEY}`);
+    assert.doesNotMatch(draftGoneView.body.toString(), />Square Online</);
+
 
     // Failed retrieval is not permanently marked queued.
     delete process.env.SQ_TEST_ORDER_JSON;
@@ -164,6 +177,8 @@ async function assertNoJobs() {
     const view = await request('GET', `/v?key=${process.env.CLEAR_KEY}`);
     assert.strictEqual(view.status, 200);
     const html = view.body.toString();
+    assert.match(html, /<th>Shop<\/th><th>Date<\/th><th>Time<\/th><th>Source<\/th><th>Type<\/th><th>Action<\/th>/);
+    assert.doesNotMatch(html, /<th>Sequence<\/th>/);
     assert.match(html, /Remove this order from the queue\?/);
     assert.ok(html.indexOf('DoorDash') < html.indexOf('GrubHub'));
     assert.match(html, />#1</);
@@ -184,6 +199,7 @@ async function assertNoJobs() {
     await poll('print1');
     console.log = originalLog;
     assert.strictEqual(captured.filter((line) => line.includes('Printer polling connected: #1')).length, 1);
+    assert.match(captured.find((line) => line.includes('Printer polling connected: #1')), /Printer polling connected: #1 - \d{2}\/\d{2}\/\d{4},? \d{1,2}:\d{2}:\d{2} (AM|PM)/);
     assert.strictEqual(captured.filter((line) => line.includes('PRINTER POLLED')).length, 0);
     const receipt = buildReceipt('c', 'UberEats Delivery', '', '1', [{ item: '1x A', modifiers: [] }]);
     assert.ok(receipt.includes(Buffer.from([0x1B, 0x64, 0x03])));
@@ -199,6 +215,7 @@ async function assertNoJobs() {
     await poll('print1');
     console.log = originalLog;
     assert.strictEqual(captured.filter((line) => line.includes('Printer stops polling 5 minutes ago: #1')).length, 1);
+    assert.match(captured.find((line) => line.includes('Printer stops polling 5 minutes ago: #1')), /Printer stops polling 5 minutes ago: #1 - \d{2}\/\d{2}\/\d{4},? \d{1,2}:\d{2}:\d{2} (AM|PM)/);
     assert.strictEqual(captured.filter((line) => line.includes('Printer polling connected: #1')).length, 1);
 
     console.log('Square webhook local verification passed');

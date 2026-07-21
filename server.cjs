@@ -10,12 +10,33 @@ const app = express();
 let openTime = 4 * 60 + 30; // 4:30 AM
 let closeTime = 17 * 60;    // 5:00 PM
 
+function businessTimeZone() {
+  return process.env.BUSINESS_TZ || "America/Chicago";
+}
+
+function formatBusinessTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: businessTimeZone(),
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod}`;
+}
+
 function isBusinessHours() {
 
   if (process.env.TEST_ALWAYS_OPEN === "1") return true;
 
   const now = new Date().toLocaleString("en-US", {
-    timeZone: "America/Chicago",
+    timeZone: businessTimeZone(),
     hour: "2-digit",
     minute: "2-digit",
     hour12: false
@@ -848,7 +869,8 @@ function routeForSquareLocation(locationId) {
 }
 
 function isSquarePrintable(order) {
-  return (order?.state || order?.status || "OPEN") === "OPEN";
+  const state = order?.state || order?.status || "OPEN";
+  return state === "OPEN" || state === "DRAFT";
 }
 
 function safeSquareError(err) {
@@ -1012,7 +1034,7 @@ function notePrinterPoll(route) {
   const label = routeLabelForRoute(route);
   const state = printerPollState.get(label) || { online: false, lastPollAt: 0, stoppedLogged: false };
   state.lastPollAt = Date.now();
-  if (!state.online) console.log(`Printer polling connected: ${label} - ${new Date().toISOString()}`);
+  if (!state.online) console.log(`Printer polling connected: ${label} - ${formatBusinessTimestamp()}`);
   state.online = true;
   state.stoppedLogged = false;
   printerPollState.set(label, state);
@@ -1116,8 +1138,8 @@ function pendingQueueRows() {
 function businessDateParts(iso) {
   const date = new Date(iso);
   return {
-    date: date.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" }),
-    time: date.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" })
+    date: date.toLocaleDateString("en-US", { timeZone: businessTimeZone(), month: "short", day: "numeric", year: "numeric" }),
+    time: date.toLocaleTimeString("en-US", { timeZone: businessTimeZone(), hour: "numeric", minute: "2-digit" })
   };
 }
 
@@ -1126,12 +1148,12 @@ app.get("/v", (req, res) => {
   if (!clearKey) return res.status(404).send("Not found");
   if (req.query.key !== clearKey) return res.status(401).send("Unauthorized");
 
-  const rows = pendingQueueRows().map((row, index) => {
+  const rows = pendingQueueRows().map((row) => {
     const when = businessDateParts(row.createdAt);
-    return `<tr><td>${index + 1}</td><td>${htmlEscape(row.routeLabel)}</td><td>${htmlEscape(when.date)}</td><td>${htmlEscape(when.time)}</td><td>${htmlEscape(row.source)}</td><td>${htmlEscape(row.orderType)}</td><td><form method="post" action="/queue/remove" onsubmit="return confirm('Remove this order from the queue?')"><input type="hidden" name="key" value="${htmlEscape(clearKey)}"><input type="hidden" name="id" value="${htmlEscape(row.removalId)}"><button type="submit">Remove</button></form></td></tr>`;
+    return `<tr><td>${htmlEscape(row.routeLabel)}</td><td>${htmlEscape(when.date)}</td><td>${htmlEscape(when.time)}</td><td>${htmlEscape(row.source)}</td><td>${htmlEscape(row.orderType)}</td><td><form method="post" action="/queue/remove" onsubmit="return confirm('Remove this order from the queue?')"><input type="hidden" name="key" value="${htmlEscape(clearKey)}"><input type="hidden" name="id" value="${htmlEscape(row.removalId)}"><button type="submit">Remove</button></form></td></tr>`;
   }).join("");
 
-  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Queue</title><style>body{font-family:Arial,sans-serif;margin:1rem}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}button{padding:.5rem}</style></head><body><h1>Waiting Orders</h1><table><thead><tr><th>Sequence</th><th>#</th><th>Date</th><th>Time</th><th>Order Source</th><th>Order Type</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="7">No waiting orders</td></tr>'}</tbody></table></body></html>`);
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Queue</title><style>body{font-family:Arial,sans-serif;margin:1rem}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}button{padding:.5rem}</style></head><body><h1>Waiting Orders</h1><table><thead><tr><th>Shop</th><th>Date</th><th>Time</th><th>Source</th><th>Type</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No waiting orders</td></tr>'}</tbody></table></body></html>`);
 });
 
 app.post("/queue/remove", express.urlencoded({ extended: false }), (req, res) => {
@@ -1250,7 +1272,7 @@ function checkPollingStatus(now = Date.now()) {
   }
   for (const [label, state] of printerPollState) {
     if (state.online && !state.stoppedLogged && now - state.lastPollAt > 5 * 60 * 1000) {
-      console.log(`Printer stops polling 5 minutes ago: ${label} - ${new Date().toISOString()}`);
+      console.log(`Printer stops polling 5 minutes ago: ${label} - ${formatBusinessTimestamp()}`);
       state.online = false;
       state.stoppedLogged = true;
     }
@@ -1267,4 +1289,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp };
