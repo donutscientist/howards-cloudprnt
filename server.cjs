@@ -7,9 +7,6 @@ const pdfParse = require("pdf-parse");
 
 const app = express();
 
-let openTime = 4 * 60 + 30; // 4:30 AM
-let closeTime = 17 * 60;    // 5:00 PM
-
 function businessTimeZone() {
   return process.env.BUSINESS_TZ || "America/Chicago";
 }
@@ -31,24 +28,6 @@ function formatBusinessTimestamp(date = new Date()) {
   return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod}`;
 }
 
-function isBusinessHours() {
-
-  if (process.env.TEST_ALWAYS_OPEN === "1") return true;
-
-  const now = new Date().toLocaleString("en-US", {
-    timeZone: businessTimeZone(),
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-
-  const [h,m] = now.split(":").map(Number);
-  const time = h * 60 + m;
-
-  return time >= openTime && time <= closeTime;
-
-}
-
 app.use(express.raw({ type: "*/*" }));
 
 // --------------------
@@ -64,6 +43,8 @@ const queuedSquareOrders = new Map(); // orderId -> expiresAt, set only after su
 const removalIdToJob = new Map(); // removalId -> { route, token }
 const routeLabels = new Map();
 const printerPollState = new Map();
+const PRINTER_POLL_SECONDS = 5;
+const EMAIL_POLL_MS = Number(process.env.EMAIL_POLL_MS || 5000);
 
 let lastEmailPollAt = Date.now();
 let emailStoppedLogged = false;
@@ -976,12 +957,6 @@ app.post("/sq-webhook", (req, res) => {
 
 app.post("/starcloudprint", (req, res) => {
   notePrinterPoll("");
-  const isOpen = isBusinessHours();
-  const pollInterval = isOpen ? 5 : 43200;
-
-  if (!isOpen) {
-    return res.json({ jobReady: false, nextPollInterval: pollInterval });
-  }
 
   if (pending.length > 0) {
     const next = pending[0];
@@ -991,11 +966,11 @@ app.post("/starcloudprint", (req, res) => {
       mediaTypes: ["application/vnd.star.starprnt"],
       jobToken: next,
       contentType: "application/vnd.star.starprnt",
-      nextPollInterval: pollInterval
+      nextPollInterval: PRINTER_POLL_SECONDS
     });
   }
 
-  res.json({ jobReady: false, nextPollInterval: pollInterval });
+  res.json({ jobReady: false, nextPollInterval: PRINTER_POLL_SECONDS });
 });
 
 app.get("/starcloudprint", (req, res) => {
@@ -1059,12 +1034,6 @@ function registerCloudPrntRoute(route) {
   app.post(path, (req, res) => {
     notePrinterPoll(normalizedRoute);
 
-    const isOpen = isBusinessHours();
-    const pollInterval = isOpen ? 5 : 43200;
-    if (!isOpen) {
-      return res.json({ jobReady: false, nextPollInterval: pollInterval });
-    }
-
     const queue = getRouteQueue(normalizedRoute);
     if (queue.pending.length > 0) {
       const next = queue.pending[0];
@@ -1074,11 +1043,11 @@ function registerCloudPrntRoute(route) {
         mediaTypes: ["application/vnd.star.starprnt"],
         jobToken: next,
         contentType: "application/vnd.star.starprnt",
-        nextPollInterval: pollInterval
+        nextPollInterval: PRINTER_POLL_SECONDS
       });
     }
 
-    res.json({ jobReady: false, nextPollInterval: pollInterval });
+    res.json({ jobReady: false, nextPollInterval: PRINTER_POLL_SECONDS });
   });
 
   app.get(path, (req, res) => {
@@ -1212,7 +1181,12 @@ app.get("/health", (req, res) => {
     },
     square: {
       queuedCount: queuedSquareOrders.size
-    }
+    },
+    printers: {
+      "#1": printerPollState.get("#1") || { online: false, lastPollAt: 0, stoppedLogged: false },
+      "#2": printerPollState.get("#2") || { online: false, lastPollAt: 0, stoppedLogged: false }
+    },
+    lastEmailPollAt
   });
 });
 
@@ -1240,31 +1214,10 @@ function startEmailPolling() {
     lastEmailPollAt = Date.now();
     emailStoppedLogged = false;
     await checkEmail();
-  }, 5000);
+  }, EMAIL_POLL_MS);
 }
 
-function stopEmailPolling() {
-  if (emailTimer) {
-    clearInterval(emailTimer);
-    emailTimer = null;
-  }
-}
-
-// check every 30 sec to switch ON/OFF exactly
-setInterval(() => {
-
-  if (isBusinessHours()) {
-    startEmailPolling();
-  } else {
-    stopEmailPolling();
-  }
-
-}, 30000);
-
-// run once on startup
-if (isBusinessHours()) {
-  startEmailPolling();
-}
+startEmailPolling();
 function checkPollingStatus(now = Date.now()) {
   if (!emailStoppedLogged && now - lastEmailPollAt > 5 * 60 * 1000) {
     console.log("email has stopped polling 5 minutes ago");
@@ -1289,4 +1242,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, EMAIL_POLL_MS, PRINTER_POLL_SECONDS };
