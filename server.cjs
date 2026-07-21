@@ -767,6 +767,121 @@ function squareApiGet(path) {
   });
 }
 
+
+function formatBusinessTimestampValue(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return formatBusinessTimestamp(date);
+}
+
+function timestampInspection(value) {
+  return {
+    raw: value || null,
+    business_tz: businessTimeZone(),
+    local: formatBusinessTimestampValue(value)
+  };
+}
+
+function phoneLastFour(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length < 4) return null;
+  return `***-***-${digits.slice(-4)}`;
+}
+
+function safeRecipient(recipient = {}) {
+  const safe = {};
+  if (recipient.display_name) safe.display_name = recipient.display_name;
+  const phone = phoneLastFour(recipient.phone_number);
+  if (phone) safe.phone_last_four = phone;
+  return safe;
+}
+
+function isSensitiveInspectionKey(key) {
+  return /token|signature|secret|email|address|phone|tender|card|buyer.*ip|ip.*address|ip_address/i.test(String(key || ""));
+}
+
+function redactedInspectionValue(value) {
+  if (Array.isArray(value)) return value.map(redactedInspectionValue);
+  if (!value || typeof value !== "object") return value;
+
+  const safe = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (isSensitiveInspectionKey(key)) continue;
+    safe[key] = redactedInspectionValue(child);
+  }
+  return safe;
+}
+
+function safeDeliveryDetails(details = {}) {
+  const safe = {};
+  for (const [key, value] of Object.entries(details || {})) {
+    if (key === "recipient" || isSensitiveInspectionKey(key)) continue;
+    safe[key] = redactedInspectionValue(value);
+  }
+  if (details.recipient) safe.recipient = safeRecipient(details.recipient);
+  return safe;
+}
+
+function squareOrderInspection(order) {
+  return {
+    id: order?.id || null,
+    version: order?.version ?? null,
+    state: order?.state || null,
+    created_at: timestampInspection(order?.created_at),
+    updated_at: timestampInspection(order?.updated_at),
+    location_id: order?.location_id || null,
+    source: redactedInspectionValue(order?.source) || null,
+    reference_id: order?.reference_id || null,
+    ticket_name: order?.ticket_name || null,
+    customer_id_present: Boolean(order?.customer_id),
+    line_items: (order?.line_items || []).map((lineItem) => ({
+      uid: lineItem?.uid || null,
+      name: lineItem?.name || null,
+      variation_name: lineItem?.variation_name || null,
+      quantity: lineItem?.quantity || null,
+      note: lineItem?.note || null,
+      modifiers: (lineItem?.modifiers || []).map((modifier) => ({
+        uid: modifier?.uid || null,
+        name: modifier?.name || null,
+        quantity: modifier?.quantity || null,
+        catalog_object_id: modifier?.catalog_object_id || null
+      }))
+    })),
+    fulfillments: (order?.fulfillments || []).map((fulfillment) => ({
+      uid: fulfillment?.uid || null,
+      type: fulfillment?.type || null,
+      state: fulfillment?.state || null,
+      pickup_details: fulfillment?.pickup_details ? {
+        schedule_type: fulfillment.pickup_details.schedule_type || null,
+        pickup_at: timestampInspection(fulfillment.pickup_details.pickup_at),
+        prep_time_duration: fulfillment.pickup_details.prep_time_duration || null,
+        recipient: {
+          display_name: fulfillment.pickup_details.recipient?.display_name || null
+        }
+      } : null,
+      delivery_details: fulfillment?.delivery_details ? safeDeliveryDetails(fulfillment.delivery_details) : null
+    })),
+    identification: {
+      detected_source: detectSquareSource(order),
+      source: redactedInspectionValue(order?.source) || null,
+      application_details: redactedInspectionValue(order?.application_details) || null,
+      metadata: redactedInspectionValue(order?.metadata) || null
+    }
+  };
+}
+
+function logSquareOrderSnapshot(order) {
+  const lineItems = Array.isArray(order?.line_items) ? order.line_items.length : 0;
+  const totalQuantity = (order?.line_items || []).reduce((sum, lineItem) => sum + (Number.parseFloat(lineItem?.quantity) || 0), 0);
+  console.log("SQUARE ORDER SNAPSHOT:");
+  console.log(`state=${order?.state || order?.status || ""}`);
+  console.log(`version=${order?.version ?? ""}`);
+  console.log(`lineItems=${lineItems}`);
+  console.log(`totalQuantity=${formatSquareQuantity(totalQuantity, 0)}`);
+  console.log(`updatedAt=${order?.updated_at || ""}`);
+}
+
 function getSquareOrderId(event) {
   return event?.data?.object?.order_created?.order_id || event?.data?.object?.order?.id || event?.data?.id;
 }
@@ -882,6 +997,7 @@ async function processSquareOrder(event) {
       console.log("SQUARE ORDER RETRIEVE FAILED: missing order");
       return;
     }
+    logSquareOrderSnapshot(order);
     if (!isSquarePrintable(order)) {
       console.log(`SQUARE ORDER NOT PRINTABLE: ${order.state || order.status || "state unknown"}`);
       return;
@@ -1111,6 +1227,25 @@ function businessDateParts(iso) {
     time: date.toLocaleTimeString("en-US", { timeZone: businessTimeZone(), hour: "numeric", minute: "2-digit" })
   };
 }
+
+
+app.get("/sq-order", async (req, res) => {
+  const clearKey = process.env.CLEAR_KEY;
+  if (!clearKey) return res.status(404).send("Not found");
+  if (req.query.key !== clearKey) return res.status(401).send("Unauthorized");
+
+  const orderId = String(req.query.id || "").trim();
+  if (!orderId) return res.status(400).send("Order ID required");
+
+  try {
+    const { order } = await squareApiGet(`/v2/orders/${encodeURIComponent(orderId)}`);
+    if (!order) return res.status(404).send("Order not found");
+    res.setHeader("Cache-Control", "no-store");
+    res.type("application/json").send(JSON.stringify(squareOrderInspection(order), null, 2));
+  } catch (err) {
+    res.status(502).type("text/plain").send(`Square order retrieve failed: ${safeSquareError(err)}`);
+  }
+});
 
 app.get("/v", (req, res) => {
   const clearKey = process.env.CLEAR_KEY;
