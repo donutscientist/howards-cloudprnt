@@ -16,7 +16,7 @@ process.env.CLIENT_ID = 'test';
 process.env.CLIENT_SECRET = 'test';
 process.env.REFRESH_TOKEN = 'test';
 
-const { app, parseSquareOrder, buildReceipt } = require('../server.cjs');
+const { app, parseSquareOrder, buildReceipt, enqueueReceipt, printerPollState, checkPollingStatus } = require('../server.cjs');
 
 const server = app.listen(0);
 const port = server.address().port;
@@ -40,7 +40,7 @@ function request(method, path, body = '', headers = {}) {
   });
 }
 
-function event(id, orderId = 'order-1', type = 'order.updated') {
+function event(id, orderId = 'order-1', type = 'order.created') {
   const key = type === 'order.created' ? 'order_created' : 'order_updated';
   return JSON.stringify({ type, event_id: id, data: { object: { [key]: { order_id: orderId, version: 1 } } } });
 }
@@ -65,7 +65,7 @@ async function poll(route) {
   return { status: res.status, json: JSON.parse(res.body.toString('utf8')) };
 }
 async function clear(reset = false) {
-  return request('GET', `/clear?key=${process.env.CLEAR_KEY}${reset ? '&resetSquareDedup=1' : ''}`);
+  return request('GET', `/clear?key=${process.env.CLEAR_KEY}${reset ? '&resetSquare=1' : ''}`);
 }
 async function drain(route) {
   const p = await poll(route);
@@ -85,15 +85,15 @@ async function assertNoJobs() {
 
     let parsed = parseSquareOrder(order('loc-1').order);
     assert.deepStrictEqual(parsed.items[0].modifiers, ['1x Glazed', '3x Vanilla Iced']);
-    assert.strictEqual(parsed.orderType, 'Square Pickup');
+    assert.strictEqual(parsed.orderType, 'Online Order Pickup');
     assert.ok(buildReceipt('c', 't', 'p', '1', [{ item: '1x Item', modifiers: ['1x Modifier Name'] }]).includes(Buffer.from([0x1B, 0x45, 0x01])));
 
     parsed = parseSquareOrder(order('loc-1', 's1', { source: { name: 'Uber Eats' }, fulfillments: [{ type: 'DELIVERY', delivery_details: {} }] }).order);
-    assert.strictEqual(parsed.orderType, 'Uber Eats Delivery');
+    assert.strictEqual(parsed.orderType, 'UberEats Delivery');
     parsed = parseSquareOrder(order('loc-1', 's2', { source: { name: 'DoorDash' } }).order);
     assert.strictEqual(parsed.orderType, 'DoorDash Pickup');
     parsed = parseSquareOrder(order('loc-1', 's3', { source: { name: 'Grubhub' }, fulfillments: [{ type: 'DELIVERY', delivery_details: {} }] }).order);
-    assert.strictEqual(parsed.orderType, 'Grubhub Delivery');
+    assert.strictEqual(parsed.orderType, 'GrubHub Delivery');
 
     let body = event('evt-same-a', 'order-same');
     await Promise.all([postSquare(body, order('loc-1', 'order-same')), postSquare(body, order('loc-1', 'order-same'))]);
@@ -111,7 +111,7 @@ async function assertNoJobs() {
     ]);
     await sleep(50);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
-    await postSquare(event('evt-retry', 'order-flow'), order('loc-1', 'order-flow'));
+    await postSquare(event('evt-retry', 'order-flow', 'order.created'), order('loc-1', 'order-flow'));
     await sleep(50);
     await assertNoJobs();
 
@@ -146,11 +146,67 @@ async function assertNoJobs() {
     assert.strictEqual((await poll('print1')).json.jobReady, false);
     assert.strictEqual((await drain('print2')).json.jobReady, true);
 
+
+    // Failed retrieval is not permanently marked queued.
+    delete process.env.SQ_TEST_ORDER_JSON;
+    process.env.SQ_TEST_ORDER_JSON = '{bad json';
+    await request('POST', '/sq-webhook', event('evt-fail', 'order-fail'), { 'content-type': 'application/json', 'x-square-hmacsha256-signature': sign(event('evt-fail', 'order-fail')) });
+    await sleep(50);
+    await assertNoJobs();
+    await postSquare(event('evt-fail-retry', 'order-fail'), order('loc-1', 'order-fail'));
+    await sleep(50);
+    assert.strictEqual((await drain('print1')).json.jobReady, true);
+
+    // Queue view is protected and chronological, uses only #1/#2, and remove only removes selected item.
+    assert.strictEqual((await request('GET', '/v?key=bad')).status, 401);
+    enqueueReceipt(buildReceipt('c', 'DoorDash Pickup', '', '1', [{ item: '1x A', modifiers: [] }]), 'print1', { routeLabel: '#1', source: 'DoorDash', orderType: 'Pickup', createdAt: '2026-07-21T10:00:00Z' });
+    enqueueReceipt(buildReceipt('c', 'GrubHub Delivery', '', '1', [{ item: '1x B', modifiers: [] }]), 'print2', { routeLabel: '#2', source: 'GrubHub', orderType: 'Delivery', createdAt: '2026-07-21T10:01:00Z' });
+    const view = await request('GET', `/v?key=${process.env.CLEAR_KEY}`);
+    assert.strictEqual(view.status, 200);
+    const html = view.body.toString();
+    assert.match(html, /Remove this order from the queue\?/);
+    assert.ok(html.indexOf('DoorDash') < html.indexOf('GrubHub'));
+    assert.match(html, />#1</);
+    assert.match(html, />#2</);
+    assert.doesNotMatch(html, /location/i);
+    const firstId = html.match(/name="id" value="([a-f0-9]+)"/)[1];
+    const removed = await request('POST', '/queue/remove', `key=${encodeURIComponent(process.env.CLEAR_KEY)}&id=${firstId}`, { 'content-type': 'application/x-www-form-urlencoded' });
+    assert.strictEqual(removed.status, 302);
+    assert.strictEqual((await poll('print1')).json.jobReady, false);
+    assert.strictEqual((await drain('print2')).json.jobReady, true);
+
+    // Polling route remains quiet for repeated polls while retaining CloudPRNT commands.
+    printerPollState.delete('#1');
+    const captured = [];
+    const originalLog = console.log;
+    console.log = (...args) => { captured.push(args.join(' ')); originalLog(...args); };
+    await poll('print1');
+    await poll('print1');
+    console.log = originalLog;
+    assert.strictEqual(captured.filter((line) => line.includes('Printer polling connected: #1')).length, 1);
+    assert.strictEqual(captured.filter((line) => line.includes('PRINTER POLLED')).length, 0);
+    const receipt = buildReceipt('c', 'UberEats Delivery', '', '1', [{ item: '1x A', modifiers: [] }]);
+    assert.ok(receipt.includes(Buffer.from([0x1B, 0x64, 0x03])));
+    assert.ok(receipt.includes(Buffer.from([0x1D, 0x56, 0x00])));
+
+    captured.length = 0;
+    console.log = (...args) => { captured.push(args.join(' ')); originalLog(...args); };
+    const state = printerPollState.get('#1');
+    state.lastPollAt = Date.now() - (6 * 60 * 1000);
+    checkPollingStatus();
+    checkPollingStatus();
+    await poll('print1');
+    await poll('print1');
+    console.log = originalLog;
+    assert.strictEqual(captured.filter((line) => line.includes('Printer stops polling 5 minutes ago: #1')).length, 1);
+    assert.strictEqual(captured.filter((line) => line.includes('Printer polling connected: #1')).length, 1);
+
     console.log('Square webhook local verification passed');
+    process.exitCode = 0;
   } finally {
     server.close();
-    process.exit(0);
   }
+  process.exit(process.exitCode || 0);
 })().catch((err) => {
   console.error(err);
   server.close();
