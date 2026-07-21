@@ -97,13 +97,22 @@ async function assertNoJobs() {
     assert.strictEqual(parsed.orderType, 'GrubHub Delivery');
 
     let body = event('evt-same-a', 'order-same');
+    const routeLogs = [];
+    const routeOriginalLog = console.log;
+    console.log = (...args) => { routeLogs.push(args.join(' ')); routeOriginalLog(...args); };
     await Promise.all([postSquare(body, order('loc-1', 'order-same')), postSquare(body, order('loc-1', 'order-same'))]);
     await sleep(50);
     let p = await poll('print1');
     assert.strictEqual(p.json.jobReady, true);
     const sameToken = p.json.jobToken;
+    assert.match(routeLogs.join('\n'), new RegExp(`SQUARE ORDER QUEUED: order-same -> #1`));
+    assert.match(routeLogs.join('\n'), new RegExp(`JOB READY: #1 -> ${sameToken}`));
     assert.strictEqual((await poll('print1')).json.jobToken, sameToken);
+    assert.strictEqual(routeLogs.filter((line) => line.includes(`JOB READY: #1 -> ${sameToken}`)).length, 2);
+    assert.strictEqual((await poll('print2')).json.jobReady, false);
     await request('GET', `/print1?token=${sameToken}`);
+    assert.match(routeLogs.join('\n'), new RegExp(`JOB DOWNLOADED: #1 -> ${sameToken}`));
+    console.log = routeOriginalLog;
     await assertNoJobs();
 
     await postSquare(event('evt-created', 'order-flow', 'order.created'), order('loc-1', 'order-flow'));
@@ -142,10 +151,19 @@ async function assertNoJobs() {
     await sleep(50);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
 
+    const loc2Logs = [];
+    const loc2OriginalLog = console.log;
+    console.log = (...args) => { loc2Logs.push(args.join(' ')); loc2OriginalLog(...args); };
     assert.strictEqual((await postSquare(event('evt-loc2', 'order-loc2'), order('loc-2', 'order-loc2'))).status, 200);
     await sleep(50);
     assert.strictEqual((await poll('print1')).json.jobReady, false);
-    assert.strictEqual((await drain('print2')).json.jobReady, true);
+    const loc2Poll = await poll('print2');
+    assert.strictEqual(loc2Poll.json.jobReady, true);
+    assert.match(loc2Logs.join('\n'), /SQUARE ORDER QUEUED: order-loc2 -> #2/);
+    assert.match(loc2Logs.join('\n'), new RegExp(`JOB READY: #2 -> ${loc2Poll.json.jobToken}`));
+    await request('GET', `/print2?token=${encodeURIComponent(loc2Poll.json.jobToken)}`);
+    assert.match(loc2Logs.join('\n'), new RegExp(`JOB DOWNLOADED: #2 -> ${loc2Poll.json.jobToken}`));
+    console.log = loc2OriginalLog;
 
     // Square DRAFT orders are printable, visible on /v immediately, and removed after download.
     assert.strictEqual((await postSquare(event('evt-draft', 'order-draft'), order('loc-1', 'order-draft', { state: 'DRAFT' }))).status, 200);
@@ -157,7 +175,9 @@ async function assertNoJobs() {
     assert.match(draftView.body.toString(), />#1</);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
     const draftGoneView = await request('GET', `/v?key=${process.env.CLEAR_KEY}`);
+    assert.strictEqual(draftGoneView.status, 200);
     assert.doesNotMatch(draftGoneView.body.toString(), />Square Online</);
+    assert.match(draftGoneView.body.toString(), /No waiting orders/);
 
 
     // Failed retrieval is not permanently marked queued.

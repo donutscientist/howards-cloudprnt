@@ -933,7 +933,7 @@ async function processSquareOrder(event) {
       console.log("SQUARE QUEUE FAILED");
       return;
     }
-    console.log(`SQUARE ORDER QUEUED: ${orderId}`);
+    console.log(`SQUARE ORDER QUEUED: ${orderId} -> ${routeLabel}`);
   } catch (err) {
     console.log(`SQUARE PROCESSING FAILED: ${safeSquareError(err)}`);
   }
