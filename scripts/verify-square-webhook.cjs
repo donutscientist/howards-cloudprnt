@@ -222,6 +222,38 @@ async function assertNoJobs() {
     assert.strictEqual(defaultJson.nextPollInterval, PRINTER_POLL_SECONDS);
     await request('GET', `/starcloudprint?token=${encodeURIComponent(defaultToken)}`);
 
+    // Inspection stays on /v, fetches the latest Square order, redacts sensitive data, and leaves the job untouched.
+    const inspectionOrder = order('loc-1', 'square-order-secret-1234', {
+      version: 7,
+      created_at: '2026-07-21T14:00:00Z',
+      updated_at: '2026-07-21T14:05:00Z',
+      reference_id: 'customer-order-42',
+      application_details: { application_id: 'application-secret-9876', application_name: 'DoorDash Integration', access_token: 'never-display-token' },
+      fulfillments: [{ type: 'PICKUP', state: 'PROPOSED', pickup_details: { recipient: { display_name: 'Pat Customer', phone_number: '+1 312 555 6789', email_address: 'private@example.com', address: { address_line_1: '123 Secret St' } }, pickup_at: '2026-07-21T15:00:00Z', note: 'Pickup counter' } }],
+      line_items: [{ uid: 'line-uid-secret-1234', catalog_object_id: 'catalog-secret-1234', quantity: '2', name: 'Burger', variation_name: 'Large', note: 'No onions', modifiers: [{ uid: 'modifier-uid-secret-5678', catalog_object_id: 'modifier-catalog-secret-5678', name: 'Cheese', quantity: '3' }] }],
+      tenders: [{ card_details: { card: { cardholder_name: 'Private' } } }]
+    });
+    process.env.SQ_TEST_ORDER_JSON = JSON.stringify(inspectionOrder);
+    enqueueReceipt(buildReceipt('Pat Customer', 'DoorDash Pickup', 'Order #42', '2', []), 'print1', { routeLabel: '#1', source: 'DoorDash', orderType: 'Pickup', squareOrderId: inspectionOrder.order.id });
+    const inspectionList = (await request('GET', `/v?key=${process.env.CLEAR_KEY}`)).body.toString();
+    const inspectMatch = inspectionList.match(/href="\/v\?key=clear-test-key&amp;inspect=([a-f0-9]+)">Inspect<\/a>/);
+    assert.ok(inspectMatch);
+    assert.doesNotMatch(inspectionList, /square-order-secret-1234/);
+    const beforeInspect = await poll('print1');
+    const inspected = await request('GET', `/v?key=${process.env.CLEAR_KEY}&inspect=${inspectMatch[1]}`);
+    const inspectedHtml = inspected.body.toString();
+    assert.strictEqual(inspected.status, 200);
+    assert.match(inspectedHtml, /Order Inspection/);
+    assert.match(inspectedHtml, /Square order version<\/dt><dd>7/);
+    assert.match(inspectedHtml, /Modifier name<\/dt><dd>Cheese/);
+    assert.match(inspectedHtml, /Quantity<\/dt><dd>3/);
+    assert.match(inspectedHtml, /Parsed receipt preview/);
+    assert.match(inspectedHtml, /••••6789/);
+    assert.doesNotMatch(inspectedHtml, /square-order-secret-1234|line-uid-secret-1234|modifier-uid-secret-5678|never-display-token|private@example\.com|123 Secret St|cardholder_name/);
+    const afterInspect = await poll('print1');
+    assert.strictEqual(afterInspect.json.jobToken, beforeInspect.json.jobToken);
+    await request('GET', `/print1?token=${encodeURIComponent(afterInspect.json.jobToken)}`);
+
     // Queue view is protected and chronological, uses only #1/#2, and remove only removes selected item.
     assert.strictEqual((await request('GET', '/v?key=bad')).status, 401);
     enqueueReceipt(buildReceipt('c', 'DoorDash Pickup', '', '1', [{ item: '1x A', modifiers: [] }]), 'print1', { routeLabel: '#1', source: 'DoorDash', orderType: 'Pickup', createdAt: '2026-07-21T10:00:00Z' });
@@ -232,6 +264,7 @@ async function assertNoJobs() {
     assert.match(html, /<th>Shop<\/th><th>Date<\/th><th>Time<\/th><th>Source<\/th><th>Type<\/th><th>Action<\/th>/);
     assert.doesNotMatch(html, /<th>Sequence<\/th>/);
     assert.match(html, /Remove this order from the queue\?/);
+    assert.match(html, />Inspect<\/a>/);
     assert.ok(html.indexOf('DoorDash') < html.indexOf('GrubHub'));
     assert.match(html, />#1</);
     assert.match(html, />#2</);
