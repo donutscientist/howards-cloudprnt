@@ -727,7 +727,7 @@ function logSquareApiError({ requestUrl, statusCode, responseBody }) {
   });
 }
 
-function squareApiGet(path) {
+function squareApiGet(path, { logErrors = true } = {}) {
   if (process.env.SQ_TEST_ORDER_JSON) {
     return Promise.resolve(JSON.parse(process.env.SQ_TEST_ORDER_JSON));
   }
@@ -751,7 +751,7 @@ function squareApiGet(path) {
       res.on("data", chunk => data += chunk);
       res.on("end", () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          logSquareApiError({ requestUrl, statusCode: res.statusCode, responseBody: data });
+          if (logErrors) logSquareApiError({ requestUrl, statusCode: res.statusCode, responseBody: data });
           return reject(new Error(`Square API ${res.statusCode}`));
         }
         try {
@@ -1083,6 +1083,113 @@ function htmlEscape(value) {
   return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 
+function maskIdentifier(value) {
+  const text = String(value || "");
+  if (!text) return "";
+  if (text.length <= 4) return "••••";
+  return `${text.slice(0, 2)}${"•".repeat(Math.min(8, text.length - 4))}${text.slice(-2)}`;
+}
+
+function lastFourPhone(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? `••••${digits.slice(-4)}` : "";
+}
+
+function inspectionTimestamp(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : businessDateParts(date.toISOString()).date + " " + businessDateParts(date.toISOString()).time;
+}
+
+function inspectionField(label, value) {
+  if (value === undefined || value === null || value === "") return "";
+  return `<div class="field"><dt>${htmlEscape(label)}</dt><dd>${htmlEscape(value)}</dd></div>`;
+}
+
+function inspectionMessage(message) {
+  return `<section class="inspection"><h2>Order Inspection</h2><p>${htmlEscape(message)}</p><p><a class="button" href="/v?key=${encodeURIComponent(process.env.CLEAR_KEY)}">Close</a></p></section>`;
+}
+
+function findWaitingJob(removalId) {
+  const entry = removalIdToJob.get(String(removalId || ""));
+  if (!entry) return null;
+  const queue = entry.route ? getRouteQueue(entry.route) : { activeJobs, pending };
+  if (!queue.pending.includes(entry.token)) return null;
+  const job = queue.activeJobs.get(entry.token);
+  return job ? { job, route: entry.route } : null;
+}
+
+function renderOrderInspection(order, routeLabel) {
+  const parsed = parseSquareOrder(order);
+  const fulfillments = order.fulfillments || [];
+  const { details } = getSquareFulfillmentDetails(order);
+  const scheduledAt = fulfillments.flatMap((fulfillment) => {
+    const info = fulfillment.pickup_details || fulfillment.delivery_details || fulfillment.shipment_details || {};
+    return [info.pickup_at, info.deliver_at, info.ship_at, info.courier_pickup_at].filter(Boolean);
+  })[0];
+  const application = order.application_details || {};
+  const applicationFields = Object.entries(application).map(([key, value]) => {
+    if (value === undefined || value === null || typeof value === "object") return "";
+    if (/token|signature|secret|email|address|payment|card|tender|phone/i.test(key)) return "";
+    const shown = /(^|_)id$/i.test(key) ? maskIdentifier(value) : value;
+    return inspectionField(`Application ${key.replaceAll("_", " ")}`, shown);
+  }).join("");
+  const fulfillmentFields = fulfillments.map((fulfillment, index) => [
+    inspectionField(`Fulfillment ${index + 1} type`, fulfillment.type),
+    inspectionField(`Fulfillment ${index + 1} state`, fulfillment.state)
+  ].join("")).join("");
+  const recipientPhone = lastFourPhone(details?.recipient?.phone_number);
+
+  const itemRows = (order.line_items || []).map((item, index) => {
+    const modifiers = (item.modifiers || []).map((modifier) => `<li>${[
+      inspectionField("Modifier name", modifier.name),
+      inspectionField("Quantity", formatSquareQuantity(modifier.quantity, 1)),
+      inspectionField("Catalog object ID", maskIdentifier(modifier.catalog_object_id)),
+      inspectionField("UID", maskIdentifier(modifier.uid))
+    ].join("")}</li>`).join("");
+    return `<article class="item"><h3>Line item ${index + 1}</h3><dl>${[
+      inspectionField("Item name", item.name),
+      inspectionField("Variation name", item.variation_name),
+      inspectionField("Quantity", formatSquareQuantity(item.quantity, 1)),
+      inspectionField("Item note", item.note),
+      inspectionField("Catalog object ID", maskIdentifier(item.catalog_object_id)),
+      inspectionField("UID", maskIdentifier(item.uid))
+    ].join("")}</dl>${modifiers ? `<h4>Modifiers</h4><ol class="modifiers">${modifiers}</ol>` : ""}</article>`;
+  }).join("") || "<p>No line items available.</p>";
+
+  const preview = {
+    customer: parsed.customer === order.customer_id ? maskIdentifier(parsed.customer) : parsed.customer,
+    orderType: parsed.orderType,
+    phone: order.id && parsed.phone.includes(order.id) ? `Order #${maskIdentifier(order.id)}` : parsed.phone,
+    totalItems: parsed.totalItems,
+    items: parsed.items,
+    estimate: parsed.estimate,
+    note: parsed.note
+  };
+  return `<section class="inspection"><h2>Order Inspection</h2>
+    <h3>Order summary</h3><dl>${[
+      inspectionField("Shop", routeLabel), inspectionField("Source", parsed.source),
+      inspectionField("Type", parsed.fulfillmentType), inspectionField("Order number", order.ticket_name || order.reference_id || maskIdentifier(order.id)),
+      inspectionField("Square order state", order.state || order.status), inspectionField("Square order version", order.version),
+      inspectionField("Created", inspectionTimestamp(order.created_at)), inspectionField("Updated", inspectionTimestamp(order.updated_at)),
+      inspectionField("Scheduled", inspectionTimestamp(scheduledAt)), inspectionField("Square order ID", maskIdentifier(order.id)),
+      inspectionField("Location ID", maskIdentifier(order.location_id))
+    ].join("")}</dl>
+    <h3>Source information</h3><dl>${[
+      inspectionField("order.source.name", order?.source?.name), applicationFields,
+      inspectionField("Reference ID", order.reference_id), inspectionField("Ticket name", order.ticket_name),
+      fulfillmentFields, inspectionField("Detected integration", parsed.source)
+    ].join("")}</dl>
+    <h3>Line items</h3>${itemRows}
+    <h3>Notes</h3><dl>${[
+      inspectionField("Order-level note", order.note), inspectionField("Fulfillment note", details.note),
+      inspectionField("Customer note", details?.recipient?.note || order.customer_note),
+      inspectionField("Customer phone", recipientPhone)
+    ].join("")}</dl>
+    <h3>Parsed receipt preview</h3><pre>${htmlEscape(JSON.stringify(preview, null, 2))}</pre>
+    <p><a class="button" href="/v?key=${encodeURIComponent(process.env.CLEAR_KEY)}">Close</a></p></section>`;
+}
+
 function pendingQueueRows() {
   const rows = [];
   const addRows = (route, queue) => {
@@ -1112,17 +1219,35 @@ function businessDateParts(iso) {
   };
 }
 
-app.get("/v", (req, res) => {
+app.get("/v", async (req, res) => {
   const clearKey = process.env.CLEAR_KEY;
   if (!clearKey) return res.status(404).send("Not found");
   if (req.query.key !== clearKey) return res.status(401).send("Unauthorized");
 
   const rows = pendingQueueRows().map((row) => {
     const when = businessDateParts(row.createdAt);
-    return `<tr><td>${htmlEscape(row.routeLabel)}</td><td>${htmlEscape(when.date)}</td><td>${htmlEscape(when.time)}</td><td>${htmlEscape(row.source)}</td><td>${htmlEscape(row.orderType)}</td><td><form method="post" action="/queue/remove" onsubmit="return confirm('Remove this order from the queue?')"><input type="hidden" name="key" value="${htmlEscape(clearKey)}"><input type="hidden" name="id" value="${htmlEscape(row.removalId)}"><button type="submit">Remove</button></form></td></tr>`;
+    return `<tr><td>${htmlEscape(row.routeLabel)}</td><td>${htmlEscape(when.date)}</td><td>${htmlEscape(when.time)}</td><td>${htmlEscape(row.source)}</td><td>${htmlEscape(row.orderType)}</td><td><div class="actions"><a class="button" href="/v?key=${encodeURIComponent(clearKey)}&amp;inspect=${encodeURIComponent(row.removalId)}">Inspect</a><form method="post" action="/queue/remove" onsubmit="return confirm('Remove this order from the queue?')"><input type="hidden" name="key" value="${htmlEscape(clearKey)}"><input type="hidden" name="id" value="${htmlEscape(row.removalId)}"><button type="submit">Remove</button></form></div></td></tr>`;
   }).join("");
 
-  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Queue</title><style>body{font-family:Arial,sans-serif;margin:1rem}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}button{padding:.5rem}</style></head><body><h1>Waiting Orders</h1><table><thead><tr><th>Shop</th><th>Date</th><th>Time</th><th>Source</th><th>Type</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No waiting orders</td></tr>'}</tbody></table></body></html>`);
+  let inspection = "";
+  if (req.query.inspect) {
+    const waiting = findWaitingJob(req.query.inspect);
+    if (!waiting?.job?.metadata?.squareOrderId) {
+      inspection = inspectionMessage("Inspection unavailable for this order.");
+    } else {
+      try {
+        const result = await squareApiGet(`/v2/orders/${encodeURIComponent(waiting.job.metadata.squareOrderId)}`, { logErrors: false });
+        inspection = result?.order
+          ? renderOrderInspection(result.order, waiting.job.metadata.routeLabel || routeLabelForRoute(waiting.route))
+          : inspectionMessage("Unable to retrieve this order from Square.");
+      } catch (err) {
+        inspection = inspectionMessage("Unable to retrieve this order from Square.");
+      }
+    }
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Queue</title><style>body{font-family:Arial,sans-serif;margin:1rem;color:#222}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:.6rem;text-align:left}.actions{display:flex;align-items:center;gap:.5rem}.actions form{margin:0}button,.button{display:inline-block;padding:.5rem;border:1px solid #777;border-radius:4px;background:#f5f5f5;color:#111;text-decoration:none;font:inherit}.inspection{margin-top:1.5rem;padding-top:1rem;border-top:2px solid #333;max-width:60rem}.field{display:grid;grid-template-columns:minmax(9rem,14rem) 1fr;gap:.5rem;padding:.25rem 0}.field dt{font-weight:bold}.field dd{margin:0;overflow-wrap:anywhere}.item{border:1px solid #ddd;border-radius:6px;padding:0 1rem;margin:.75rem 0}.modifiers{padding-left:1.25rem}.modifiers li{margin:.5rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f5f5;padding:1rem;border-radius:6px}@media(max-width:600px){body{margin:.5rem}th,td{padding:.45rem;font-size:.9rem}.field{grid-template-columns:1fr}.field dd{margin-left:.5rem}.actions{flex-direction:column;align-items:flex-start}}</style></head><body><h1>Waiting Orders</h1><table><thead><tr><th>Shop</th><th>Date</th><th>Time</th><th>Source</th><th>Type</th><th>Action</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No waiting orders</td></tr>'}</tbody></table>${inspection}</body></html>`);
 });
 
 app.post("/queue/remove", express.urlencoded({ extended: false }), (req, res) => {
