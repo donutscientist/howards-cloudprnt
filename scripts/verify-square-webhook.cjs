@@ -106,6 +106,50 @@ async function assertNoJobs() {
 
     parsed = parseSquareOrder(order('loc-1', 's1', { source: { name: 'Uber Eats' }, fulfillments: [{ type: 'DELIVERY', delivery_details: {} }] }).order);
     assert.strictEqual(parsed.orderType, 'UberEats Delivery');
+
+    const uberOrder = {
+      id: 'square-order-id', reference_id: 'b1b51a4f-026d-4507-b39b-5e9caa3091e3',
+      ticket_name: 'Kimberly T.', created_at: '2026-07-28T11:10:00.000Z',
+      source: { name: 'Uber Eats' },
+      tenders: [{ id: 'tender-secret', other_details: { source: 'UBEREATS' }, payment_note: 'paid' }],
+      fulfillments: [{ type: 'DELIVERY', delivery_details: {
+        courier_provider_name: 'Uber Eats', schedule_type: 'ASAP', placed_at: '2026-07-28T11:18:55.856Z',
+        recipient: { display_name: 'Wrong Name', phone_number: '+13125550123' },
+        note: 'Phone PIN 1234; courier Taylor +13125550999; blue Honda'
+      } }],
+      line_items: [
+        { quantity: '1.0', name: 'Dozen Donut Holes' },
+        { quantity: '1', name: 'Custom Half Dozen', modifiers: [{ name: 'Glazed', quantity: '4' }, { name: 'Cookie N Cream (Oreo)', quantity: '2.0', base_price_money: { amount: 100 } }] },
+        { quantity: '1', name: 'Custom Half Dozen', modifiers: [{ name: 'Glazed', quantity: '2' }, { name: 'Vanilla Sprinkled', quantity: '2' }, { name: 'Powdered Donut', quantity: '2' }] }
+      ]
+    };
+    parsed = parseSquareOrder(uberOrder);
+    assert.strictEqual(parsed.totalItems, '3');
+    assert.strictEqual(parsed.source, 'UberEats');
+    assert.strictEqual(parsed.fulfillmentType, 'Delivery');
+    assert.strictEqual(parsed.orderType, 'UberEats Delivery');
+    assert.strictEqual(parsed.phone, 'Order #91e3');
+    assert.strictEqual(parsed.customer, 'Kimberly T.');
+    assert.strictEqual(parsed.schedule, 'ASAP');
+    assert.strictEqual(parsed.orderedOn, '07/28/2026 6:18 AM');
+    assert.deepStrictEqual(parsed.items[1].modifiers, ['4x Glazed', '2x Cookie N Cream (Oreo)']);
+    assert.deepStrictEqual(parsed.items[2].modifiers, ['2x Glazed', '2x Vanilla Sprinkled', '2x Powdered Donut']);
+    assert.strictEqual(parsed.note, '');
+    const uberReceiptText = buildReceipt(parsed.customer, parsed.orderType, parsed.phone, parsed.totalItems, parsed.items, parsed.estimate, parsed.note, { schedule: parsed.schedule, orderedOn: parsed.orderedOn }).toString('ascii');
+    assert.match(uberReceiptText, /Total Items: 3/);
+    assert.match(uberReceiptText, /Order #91e3/);
+    assert.match(uberReceiptText, /Schedule: ASAP/);
+    assert.match(uberReceiptText, /Ordered on: 07\/28\/2026 6:18 AM/);
+    assert.doesNotMatch(uberReceiptText, /2026-07-28T11:18:55.856Z|13125550999|13125550123|paid|amount|100/);
+
+    const modifierCases = parseSquareOrder(order('loc-1', 'modifier-cases', { line_items: [
+      { quantity: '1', name: 'Multiple', modifiers: [{ name: 'One', quantity: '1' }, { name: 'Missing' }, { name: 'Zero', quantity: '0' }, { name: 'Invalid', quantity: 'nope' }, { name: 'Two', quantity: '2' }] },
+      { quantity: '1', name: 'Single One', modifiers: [{ name: 'Only', quantity: '1' }] },
+      { quantity: '1', name: 'Single Two', modifiers: [{ name: 'Only Twice', quantity: '2' }] }
+    ] }).order);
+    assert.deepStrictEqual(modifierCases.items[0].modifiers, ['1x One', '1x Missing', '1x Zero', '1x Invalid', '2x Two']);
+    assert.deepStrictEqual(modifierCases.items[1].modifiers, ['Only']);
+    assert.deepStrictEqual(modifierCases.items[2].modifiers, ['2x Only Twice']);
     parsed = parseSquareOrder(order('loc-1', 's2', { source: { name: 'DoorDash' } }).order);
     assert.strictEqual(parsed.orderType, 'DoorDash Pickup');
     parsed = parseSquareOrder(order('loc-1', 's3', { source: { name: 'Grubhub' }, fulfillments: [{ type: 'DELIVERY', delivery_details: {} }] }).order);
@@ -222,38 +266,6 @@ async function assertNoJobs() {
     assert.strictEqual(defaultJson.nextPollInterval, PRINTER_POLL_SECONDS);
     await request('GET', `/starcloudprint?token=${encodeURIComponent(defaultToken)}`);
 
-    // Inspection stays on /v, fetches the latest Square order, redacts sensitive data, and leaves the job untouched.
-    const inspectionOrder = order('loc-1', 'square-order-secret-1234', {
-      version: 7,
-      created_at: '2026-07-21T14:00:00Z',
-      updated_at: '2026-07-21T14:05:00Z',
-      reference_id: 'customer-order-42',
-      application_details: { application_id: 'application-secret-9876', application_name: 'DoorDash Integration', access_token: 'never-display-token' },
-      fulfillments: [{ type: 'PICKUP', state: 'PROPOSED', pickup_details: { recipient: { display_name: 'Pat Customer', phone_number: '+1 312 555 6789', email_address: 'private@example.com', address: { address_line_1: '123 Secret St' } }, pickup_at: '2026-07-21T15:00:00Z', note: 'Pickup counter' } }],
-      line_items: [{ uid: 'line-uid-secret-1234', catalog_object_id: 'catalog-secret-1234', quantity: '2', name: 'Burger', variation_name: 'Large', note: 'No onions', modifiers: [{ uid: 'modifier-uid-secret-5678', catalog_object_id: 'modifier-catalog-secret-5678', name: 'Cheese', quantity: '3' }] }],
-      tenders: [{ card_details: { card: { cardholder_name: 'Private' } } }]
-    });
-    process.env.SQ_TEST_ORDER_JSON = JSON.stringify(inspectionOrder);
-    enqueueReceipt(buildReceipt('Pat Customer', 'DoorDash Pickup', 'Order #42', '2', []), 'print1', { routeLabel: '#1', source: 'DoorDash', orderType: 'Pickup', squareOrderId: inspectionOrder.order.id });
-    const inspectionList = (await request('GET', `/v?key=${process.env.CLEAR_KEY}`)).body.toString();
-    const inspectMatch = inspectionList.match(/href="\/v\?key=clear-test-key&amp;inspect=([a-f0-9]+)">Inspect<\/a>/);
-    assert.ok(inspectMatch);
-    assert.doesNotMatch(inspectionList, /square-order-secret-1234/);
-    const beforeInspect = await poll('print1');
-    const inspected = await request('GET', `/v?key=${process.env.CLEAR_KEY}&inspect=${inspectMatch[1]}`);
-    const inspectedHtml = inspected.body.toString();
-    assert.strictEqual(inspected.status, 200);
-    assert.match(inspectedHtml, /Order Inspection/);
-    assert.match(inspectedHtml, /Square order version<\/dt><dd>7/);
-    assert.match(inspectedHtml, /Modifier name<\/dt><dd>Cheese/);
-    assert.match(inspectedHtml, /Quantity<\/dt><dd>3/);
-    assert.match(inspectedHtml, /Parsed receipt preview/);
-    assert.match(inspectedHtml, /••••6789/);
-    assert.doesNotMatch(inspectedHtml, /square-order-secret-1234|line-uid-secret-1234|modifier-uid-secret-5678|never-display-token|private@example\.com|123 Secret St|cardholder_name/);
-    const afterInspect = await poll('print1');
-    assert.strictEqual(afterInspect.json.jobToken, beforeInspect.json.jobToken);
-    await request('GET', `/print1?token=${encodeURIComponent(afterInspect.json.jobToken)}`);
-
     // Queue view is protected and chronological, uses only #1/#2, and remove only removes selected item.
     assert.strictEqual((await request('GET', '/v?key=bad')).status, 401);
     enqueueReceipt(buildReceipt('c', 'DoorDash Pickup', '', '1', [{ item: '1x A', modifiers: [] }]), 'print1', { routeLabel: '#1', source: 'DoorDash', orderType: 'Pickup', createdAt: '2026-07-21T10:00:00Z' });
@@ -264,7 +276,8 @@ async function assertNoJobs() {
     assert.match(html, /<th>Shop<\/th><th>Date<\/th><th>Time<\/th><th>Source<\/th><th>Type<\/th><th>Action<\/th>/);
     assert.doesNotMatch(html, /<th>Sequence<\/th>/);
     assert.match(html, /Remove this order from the queue\?/);
-    assert.match(html, />Inspect<\/a>/);
+    assert.doesNotMatch(html, /Inspect|inspect=/);
+    assert.match(html, />Remove<\/button>/);
     assert.ok(html.indexOf('DoorDash') < html.indexOf('GrubHub'));
     assert.match(html, />#1</);
     assert.match(html, />#2</);
