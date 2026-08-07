@@ -4,6 +4,8 @@ const https = require("https");
 const express = require("express");
 const { google } = require("googleapis");
 const pdfParse = require("pdf-parse");
+const path = require("path");
+const alertSystem = require("./alert-system.cjs");
 
 const app = express();
 
@@ -29,6 +31,7 @@ function formatBusinessTimestamp(date = new Date()) {
 }
 
 app.use(express.raw({ type: "*/*" }));
+app.use(express.static(path.join(__dirname, "public"), { index: false, maxAge: "1h" }));
 
 // --------------------
 // ADVANCED CLOUDPRNT QUEUE
@@ -614,7 +617,13 @@ if (platform === "DD") {
       parsed.note
     );
 
-    enqueueReceipt(jobBuf, "", { source: platform === "GH" ? "GrubHub" : "DoorDash", orderType: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup" });
+    const printJobId = enqueueReceipt(jobBuf, "", { source: platform === "GH" ? "GrubHub" : "DoorDash", orderType: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup" });
+    alertSystem.createShopAlert({
+      shop: 1, jobReference: `email:${messageId}`, source: platform === "GH" ? "GrubHub" : "DoorDash",
+      type: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup",
+      customer: parsed.customer, reference: String(parsed.phone || "").replace(/^Order\s*#/i, "").trim(),
+      items: parsed.items, customerNote: parsed.note
+    });
 
     await gmail.users.messages.modify({
       userId: "me",
@@ -931,10 +940,16 @@ async function processSquareOrder(event) {
     }
 
     try {
-      enqueueReceipt(jobBuf, route, {
+      const printJobId = enqueueReceipt(jobBuf, route, {
         routeLabel,
         source: parsed.source,
         orderType: parsed.fulfillmentType
+      });
+      alertSystem.createShopAlert({
+        shop: routeLabel === "#2" ? 2 : 1, jobReference: printJobId, source: parsed.source,
+        type: parsed.fulfillmentType, customer: parsed.customer,
+        reference: String(parsed.phone || "").replace(/^Order\s*#/i, "").trim(), items: parsed.items,
+        scheduleType: parsed.schedule, scheduledTime: parsed.scheduledFor, customerNote: parsed.note
       });
       markSquareQueued(orderId);
     } catch (err) {
@@ -1139,6 +1154,67 @@ function businessDateParts(iso) {
   };
 }
 
+function authenticateAlert(req, res) {
+  const clearKey = process.env.CLEAR_KEY;
+  if (!clearKey) { res.status(404).send("Not found"); return false; }
+  if (req.query.key !== clearKey) { res.status(401).send("Unauthorized"); return false; }
+  return true;
+}
+
+function alertShopFromRequest(req) {
+  const shop = Number(req.params.shop);
+  return Number.isInteger(shop) && shop > 0 ? shop : null;
+}
+
+function publicAlert(record) {
+  return {
+    id: record.id, shop: record.shop, createdAt: record.createdAt,
+    receivedTime: businessDateParts(record.createdAt).time, source: record.source, type: record.type,
+    customer: record.customer, reference: record.reference, scheduleType: record.scheduleType,
+    scheduledTime: record.scheduledTime, customerNote: record.customerNote,
+    fulfillmentNote: record.fulfillmentNote, items: record.items,
+    acknowledged: record.acknowledged, acknowledgedAt: record.acknowledgedAt
+  };
+}
+
+app.get(/^\/alert(\d+)$/, (req, res) => {
+  req.params.shop = req.params[0];
+  if (!authenticateAlert(req, res) || !alertShopFromRequest(req)) return;
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#091018"><meta name="apple-mobile-web-app-capable" content="yes"><title>Howard's Order Alert</title><link rel="manifest"><link rel="icon" href="/alert-icon.svg"><link rel="stylesheet" href="/alert-app.css"></head><body><header><h1>HOWARD'S ORDER ALERT</h1><div id="shop" class="shop"></div><div>STATUS: <span id="status" class="status reconnecting">RECONNECTING</span></div></header><main><section id="listView"><div class="controls"><button id="enableSound" class="primary">ENABLE SOUND</button><button id="testSound">TEST SOUND</button><button id="wake">KEEP SCREEN AWAKE: OFF</button></div><div id="alerts"></div></section><section id="detailView" class="hidden details"><button id="back">BACK TO ALERTS</button><div id="detailBody"></div></section></main><script src="/alert-app.js" defer></script></body></html>`);
+});
+
+app.get(/^\/api\/alert(\d+)$/, (req, res) => {
+  req.params.shop = req.params[0];
+  if (!authenticateAlert(req, res)) return;
+  const shop = alertShopFromRequest(req);
+  if (!shop) return res.status(404).send("Not found");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ shop, alerts: alertSystem.getShopAlerts(shop).map(publicAlert) });
+});
+
+app.post(/^\/api\/alert(\d+)\/([a-f0-9]+)\/ack$/, (req, res) => {
+  req.params.shop = req.params[0];
+  if (!authenticateAlert(req, res)) return;
+  const shop = alertShopFromRequest(req);
+  const record = shop && alertSystem.acknowledgeShopAlert(shop, req.params[1]);
+  if (!record) return res.status(404).send("Not found");
+  res.json({ ok: true, alert: publicAlert(record) });
+});
+
+app.get(/^\/alert(\d+)\/manifest\.webmanifest$/, (req, res) => {
+  req.params.shop = req.params[0];
+  if (!authenticateAlert(req, res)) return;
+  const shop = alertShopFromRequest(req);
+  if (!shop) return res.status(404).send("Not found");
+  res.type("application/manifest+json").send(JSON.stringify({
+    name: "Howard's Order Alert", short_name: `Order Alert ${shop}`, id: `/alert${shop}`,
+    start_url: `/alert${shop}?key=${encodeURIComponent(req.query.key)}`, scope: "/", display: "standalone",
+    background_color: "#091018", theme_color: "#091018",
+    icons: [{ src: "/alert-icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }]
+  }));
+});
+
 app.get("/v", (req, res) => {
   const clearKey = process.env.CLEAR_KEY;
   if (!clearKey) return res.status(404).send("Not found");
@@ -1263,6 +1339,7 @@ function checkPollingStatus(now = Date.now()) {
 }
 
 setInterval(() => checkPollingStatus(), 30000);
+setInterval(() => alertSystem.runAlertMaintenance(new Date(), businessTimeZone()), 30000);
 
 
 if (require.main === module) {
@@ -1271,4 +1348,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, EMAIL_POLL_MS, PRINTER_POLL_SECONDS };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, EMAIL_POLL_MS, PRINTER_POLL_SECONDS, alertSystem };
