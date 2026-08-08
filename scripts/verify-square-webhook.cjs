@@ -132,6 +132,8 @@ async function assertNoJobs() {
     assert.strictEqual(parsed.customer, 'Kimberly T.');
     assert.strictEqual(parsed.schedule, 'ASAP');
     assert.strictEqual(parsed.orderedOn, '07/28/2026 6:18 AM');
+    assert.strictEqual(parsed.customerPhone, '+13125550123');
+    assert.strictEqual(parsed.courierPhone, '+13125550999');
     assert.deepStrictEqual(parsed.items[1].modifiers, ['4x Glazed', '2x Cookie N Cream (Oreo)']);
     assert.deepStrictEqual(parsed.items[2].modifiers, ['2x Glazed', '2x Vanilla Sprinkled', '2x Powdered Donut']);
     assert.strictEqual(parsed.note, '');
