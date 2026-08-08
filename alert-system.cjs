@@ -29,11 +29,6 @@ function pushoverRequest(method, path, values = {}) {
   });
 }
 
-function alertBaseUrl() {
-  try { return new URL(process.env.RENDER_EXTERNAL_URL || "https://howards-cloudprnt.onrender.com").origin; }
-  catch { return "https://howards-cloudprnt.onrender.com"; }
-}
-
 async function sendPushover(record) {
   const token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER;
   if (!token || !user) {
@@ -49,12 +44,24 @@ async function sendPushover(record) {
 }
 
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
+  const customer = record.customer || "Customer";
+  const header = [customer, `${record.source} - ${record.type}`];
+  const details = [];
+  if (record.reference) details.push(`Order #${record.reference}`);
+  if (record.scheduleType) details.push(`Schedule: ${record.scheduleType}`);
+  if (record.orderedTime) details.push(`Ordered on: ${record.orderedTime}`);
+  if (record.scheduledTime) details.push(`Scheduled for: ${record.scheduledTime}`);
+  if (record.customerPhone) details.push(`Customer Phone: ${record.customerPhone}`);
+  if (record.courierPhone) details.push(`Courier Phone: ${record.courierPhone}`);
+  const itemDetails = record.items.flatMap(({ item, modifiers }) => [item, ...modifiers]);
+  const notes = [];
+  if (record.customerNote) notes.push(`Customer note: ${record.customerNote}`);
+  if (record.fulfillmentNote) notes.push(`Order note: ${record.fulfillmentNote}`);
+  const sections = [header.join("\n"), details.join("\n"), itemDetails.join("\n"), notes.join("\n")].filter(Boolean);
   return {
-    token, user, title: record.customer || "Customer",
-    message: `${record.source}\n${record.type}`,
-    priority: "2", retry: "60", expire: "1800",
-    url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
-    url_title: "View Order"
+    token, user, title: `New Order - Shop #${record.shop}`,
+    message: sections.join("\n\n").slice(0, 1024),
+    priority: "2", retry: "60", expire: "1800"
   };
 }
 
@@ -95,6 +102,10 @@ function safeItems(items) {
   }));
 }
 
+function safePhone(value) {
+  return safeText(value, 40);
+}
+
 function notify(shop) {
   for (const listener of listeners.get(shop) || []) listener();
 }
@@ -126,8 +137,10 @@ function createShopAlert(data) {
     createdAt: data.createdAt || new Date().toISOString(),
     source,
     type: data.type === "Delivery" ? "Delivery" : "Pickup",
-    customer: safeText(data.customer, 100), reference: safeText(data.reference, 100), orderedTime: safeText(data.orderedTime, 100),
+    customer: /^(?:online order)$/i.test(safeText(data.customer, 100)) ? "" : safeText(data.customer, 100),
+    reference: safeText(data.reference, 100), orderedTime: safeText(data.orderedTime, 100),
     scheduleType: safeText(data.scheduleType, 40), scheduledTime: safeText(data.scheduledTime, 100),
+    customerPhone: safePhone(data.customerPhone), courierPhone: safePhone(data.courierPhone),
     customerNote: safeNote(data.customerNote), fulfillmentNote: safeNote(data.fulfillmentNote),
     items: safeItems(data.items), acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, jobReference
   };

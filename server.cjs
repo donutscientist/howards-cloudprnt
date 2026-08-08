@@ -852,6 +852,9 @@ function parseSquareOrder(order) {
   const schedule = scheduleType === "ASAP" ? "ASAP" : scheduleType === "SCHEDULED" ? "Scheduled" : "";
   const orderedAt = details.placed_at || order.created_at || "";
   const scheduledAt = details.pickup_at || details.deliver_at || "";
+  const customerPhone = details?.recipient?.phone_number || "";
+  const courierPhone = details?.courier_details?.phone_number || details?.courier?.phone_number || details?.courier_phone_number
+    || String(details?.note || "").match(/\bcourier\b[^\n\r+\d]*(\+?\d[\d\s().-]{7,}\d)/i)?.[1] || "";
 
   return {
     customer: getSquareRecipient(order),
@@ -864,6 +867,9 @@ function parseSquareOrder(order) {
     schedule,
     orderedOn: formatSquareReceiptTimestamp(orderedAt),
     scheduledFor: schedule === "Scheduled" ? formatSquareReceiptTimestamp(scheduledAt) : "",
+    customerPhone,
+    courierPhone,
+    fulfillmentNote: details?.note || "",
     source,
     fulfillmentType
   };
@@ -949,7 +955,9 @@ async function processSquareOrder(event) {
         shop: routeLabel === "#2" ? 2 : 1, jobReference: printJobId, source: parsed.source,
         type: parsed.fulfillmentType, customer: parsed.customer,
         reference: String(parsed.phone || "").replace(/^Order\s*#/i, "").trim(), items: parsed.items,
-        orderedTime: parsed.orderedOn, scheduleType: parsed.schedule, scheduledTime: parsed.scheduledFor, customerNote: parsed.note
+        orderedTime: parsed.orderedOn, scheduleType: parsed.schedule, scheduledTime: parsed.scheduledFor,
+        customerNote: parsed.note, fulfillmentNote: parsed.fulfillmentNote,
+        customerPhone: parsed.customerPhone, courierPhone: parsed.courierPhone
       });
       markSquareQueued(orderId);
     } catch (err) {
