@@ -1,9 +1,74 @@
 const crypto = require("crypto");
+const https = require("https");
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const alerts = new Map();
 const listeners = new Map();
 let lastResetDate = "";
+let pushoverMissingLogged = false;
+
+function pushoverRequest(method, path, values = {}) {
+  const body = new URLSearchParams(values).toString();
+  return new Promise((resolve, reject) => {
+    const request = https.request({ hostname: "api.pushover.net", method, path, headers: body ? {
+      "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body)
+    } : {} }, (response) => {
+      let data = "";
+      response.on("data", (chunk) => data += chunk);
+      response.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (response.statusCode < 200 || response.statusCode >= 300 || parsed.status !== 1) return reject(new Error(`Pushover API ${response.statusCode}`));
+          resolve(parsed);
+        } catch { reject(new Error(`Pushover API ${response.statusCode}`)); }
+      });
+    });
+    request.on("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+function alertBaseUrl() {
+  try { return new URL(process.env.RENDER_EXTERNAL_URL || "https://howards-cloudprnt.onrender.com").origin; }
+  catch { return "https://howards-cloudprnt.onrender.com"; }
+}
+
+async function sendPushover(record) {
+  const token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER;
+  if (!token || !user) {
+    if (!pushoverMissingLogged) { console.log("Pushover is not configured; notifications are disabled"); pushoverMissingLogged = true; }
+    return;
+  }
+  const values = buildPushoverValues(record, token, user);
+  if (process.env.PUSHOVER_DEVICE) values.device = process.env.PUSHOVER_DEVICE;
+  try {
+    const response = await pushoverRequest("POST", "/1/messages.json", values);
+    if (response.receipt && shopAlerts(record.shop).includes(record)) record.pushoverReceipt = response.receipt;
+  } catch (error) { console.error(`Pushover delivery failed: ${error.message}`); }
+}
+
+function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
+  return {
+    token, user, title: `New Order - Shop #${record.shop}`,
+    message: `${record.customer || "Customer"}\n${record.source} - ${record.type}`,
+    priority: "2", retry: "60", expire: "1800",
+    url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
+    url_title: "View Order"
+  };
+}
+
+async function checkPushoverReceipts() {
+  const token = process.env.PUSHOVER_TOKEN;
+  if (!token) return;
+  const active = Array.from(alerts.values()).flat().filter((record) => record.pushoverReceipt && !record.acknowledged);
+  await Promise.all(active.map(async (record) => {
+    try {
+      const response = await pushoverRequest("GET", `/1/receipts/${encodeURIComponent(record.pushoverReceipt)}.json?token=${encodeURIComponent(token)}`);
+      if (response.acknowledged === 1) acknowledgeShopAlert(record.shop, record.id, new Date(Number(response.acknowledged_at || 0) * 1000 || Date.now()));
+    } catch (error) { console.error(`Pushover receipt check failed: ${error.message}`); }
+  }));
+}
 
 function shopAlerts(shop) {
   if (!alerts.has(shop)) alerts.set(shop, []);
@@ -48,7 +113,8 @@ function createShopAlert(data) {
   pruneOldAlerts();
   const shop = Number(data.shop);
   if (!Number.isInteger(shop) || shop < 1) throw new Error("Invalid shop");
-  if (!["UberEats", "DoorDash", "GrubHub"].includes(data.source)) return null;
+  const source = safeText(data.source, 60);
+  if (!source) return null;
   const jobReference = safeText(data.jobReference, 100);
   const records = shopAlerts(shop);
   if (jobReference) {
@@ -58,15 +124,16 @@ function createShopAlert(data) {
   const record = {
     id: crypto.randomBytes(12).toString("hex"), shop,
     createdAt: data.createdAt || new Date().toISOString(),
-    source: data.source,
+    source,
     type: data.type === "Delivery" ? "Delivery" : "Pickup",
-    customer: safeText(data.customer, 100), reference: safeText(data.reference, 100),
+    customer: safeText(data.customer, 100), reference: safeText(data.reference, 100), orderedTime: safeText(data.orderedTime, 100),
     scheduleType: safeText(data.scheduleType, 40), scheduledTime: safeText(data.scheduledTime, 100),
     customerNote: safeNote(data.customerNote), fulfillmentNote: safeNote(data.fulfillmentNote),
-    items: safeItems(data.items), acknowledged: false, acknowledgedAt: null, jobReference
+    items: safeItems(data.items), acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, jobReference
   };
   records.unshift(record);
   notify(shop);
+  void sendPushover(record);
   return record;
 }
 
@@ -116,6 +183,6 @@ function subscribe(shop, listener) {
   return () => listeners.get(shop)?.delete(listener);
 }
 
-function _clearForTests() { alerts.clear(); lastResetDate = ""; }
+function _clearForTests() { alerts.clear(); lastResetDate = ""; pushoverMissingLogged = false; }
 
-module.exports = { createShopAlert, acknowledgeShopAlert, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, subscribe, _clearForTests, MAX_AGE_MS };
+module.exports = { createShopAlert, acknowledgeShopAlert, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, subscribe, _clearForTests, MAX_AGE_MS };
