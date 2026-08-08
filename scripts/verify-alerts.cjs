@@ -34,8 +34,7 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     const detail=JSON.parse(shop1.body).alerts[0];
     assert.deepStrictEqual(detail.items,[{item:"2x Burger",modifiers:["3x Pickle"]}]);
     assert.doesNotMatch(shop1.body,/price|subtotal|tax|tip|total|tender|payment|card/i);
-    assert.strictEqual((await request("POST",`/api/alert1/${second.id}/ack?key=alert-test-key`)).status,404);
-    assert.strictEqual((await request("POST",`/api/alert1/${first.id}/ack?key=alert-test-key`)).status,200);
+    alertSystem.acknowledgeShopAlert(1,first.id);
     assert.strictEqual(alertSystem.getShopAlerts(1)[0].acknowledged,true);
     assert.strictEqual(alertSystem.getShopAlerts(2)[0].acknowledged,false);
     assert.ok(q1.activeJobs.has(token1));assert.ok(q2.activeJobs.has(token2));
@@ -54,8 +53,9 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     assert.strictEqual(alertSystem.getShopAlerts(1).length,0);assert.strictEqual(q1.pending.length,pendingBefore);
     const manifestResponse=await request("GET","/alert1/manifest.webmanifest?key=alert-test-key");
     const manifest=JSON.parse(manifestResponse.body);assert.strictEqual(manifest.display,"standalone");assert.match(manifest.start_url,/^\/alert1\?key=/);assert.ok(manifest.icons.length);
-    const page=await request("GET","/alert1?key=alert-test-key");assert.strictEqual(page.status,200);assert.match(page.body,/serviceWorker|alert-app\.js/);
-    const client=fs.readFileSync(path.join(__dirname,"../public/alert-app.js"),"utf8");assert.match(client,/serviceWorker\?\.register\('\/alert-sw\.js'\)/);assert.match(client,/setInterval\(refresh,3000\)/);assert.match(client,/alerts\.some\(a=>!a\.acknowledged\)/);
+    const page=await request("GET","/alert1?key=alert-test-key");assert.strictEqual(page.status,200);assert.match(page.body,/alert-app\.js/);assert.doesNotMatch(page.body,/ENABLE SOUND|TEST SOUND|ACKNOWLEDGE/i);
+    const client=fs.readFileSync(path.join(__dirname,"../public/alert-app.js"),"utf8");assert.match(client,/serviceWorker\?\.register\('\/alert-sw\.js'\)/);assert.match(client,/setInterval\(refresh, 3000\)/);assert.match(client,/VIEW DETAILS/);assert.match(client,/new URLSearchParams\(location\.search\)\.get\("order"\)/);assert.doesNotMatch(client,/AudioContext|Oscillator|vibrate|acknowledge|tone|alarm/i);
+    const push=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(push.priority,"2");assert.strictEqual(push.retry,"60");assert.strictEqual(push.expire,"1800");assert.strictEqual(push.title,"New Order - Shop #1");assert.strictEqual(push.message,"Pat\nUberEats - Delivery");assert.match(push.url,new RegExp(`/alert1\\?key=alert-test-key&order=${first.id}$`));assert.strictEqual(push.url_title,"View Order");assert.doesNotMatch(push.message,/phone|address|\$/i);
     delete process.env.CLEAR_KEY;assert.strictEqual((await request("GET","/alert1?key=alert-test-key")).status,404);
     console.log("Alert system verification passed (21 focused checks)");
   } finally { server.close(); }
