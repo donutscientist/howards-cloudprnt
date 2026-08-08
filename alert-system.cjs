@@ -49,22 +49,9 @@ async function sendPushover(record) {
 
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
   const customer = record.customer || "Customer";
-  const header = [customer, `${record.source} - ${record.type}`];
-  const details = [];
-  if (record.reference) details.push(`Order #${record.reference}`);
-  if (record.scheduleType) details.push(`Schedule: ${record.scheduleType}`);
-  if (record.orderedTime) details.push(`Ordered on: ${record.orderedTime}`);
-  if (record.scheduledTime) details.push(`Scheduled for: ${record.scheduledTime}`);
-  if (record.customerPhone) details.push(`Customer Phone: ${record.customerPhone}`);
-  if (record.courierPhone) details.push(`Courier Phone: ${record.courierPhone}`);
-  const itemDetails = record.items.map(({ item, modifiers }) => [item, ...modifiers.map((modifier) => `    ${modifier}`)].join("\n"));
-  const notes = [];
-  if (record.customerNote) notes.push(`Customer note: ${record.customerNote}`);
-  if (record.fulfillmentNote) notes.push(`Order note: ${record.fulfillmentNote}`);
-  const sections = [header.join("\n"), details.join("\n"), itemDetails.join("\n\n"), notes.join("\n")].filter(Boolean);
   const values = {
-    token, user, title: `New Order - Shop #${record.shop}`,
-    message: sections.join("\n\n").slice(0, 1024),
+    token, user, title: `${customer} - ${record.source} - ${record.type}`,
+    message: "\u200B",
     priority: "2", retry: "60", expire: "1800"
   };
   const device = process.env[`PUSHOVER_DEVICE_${record.shop}`];
