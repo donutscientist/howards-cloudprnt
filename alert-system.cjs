@@ -54,9 +54,36 @@ async function sendPushover(record) {
 
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
   const customer = record.customer || "Customer";
+  const header = [customer, `${record.source} - ${record.type}`];
+  const orderDetails = [];
+  if (record.reference) orderDetails.push(`Order #${record.reference}`);
+  if (record.scheduleType) orderDetails.push(`Schedule: ${record.scheduleType}`);
+  if (record.orderedTime) orderDetails.push(`Ordered on: ${record.orderedTime}`);
+  if (record.scheduledTime) orderDetails.push(`Scheduled for: ${record.scheduledTime}`);
+
+  const phones = [];
+  if (record.customerPhone) phones.push(`Customer Phone: ${record.customerPhone}`);
+  if (record.courierPhone) phones.push(`Courier Phone: ${record.courierPhone}`);
+
+  const totalItems = record.items.reduce((total, { item }) => {
+    const quantity = Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
+    return total + quantity;
+  }, 0);
+  const itemDetails = record.items.map(({ item, modifiers }) => [
+    item,
+    ...modifiers.map((modifier) => `    ${modifier}`)
+  ].join("\n"));
+  const sections = [
+    header.join("\n"),
+    orderDetails.join("\n"),
+    phones.join("\n"),
+    `Total: ${totalItems} Items`,
+    itemDetails.join("\n\n")
+  ].filter(Boolean);
   const values = {
     token, user,
-    message: `${customer}\n${record.source} - ${record.type}`,
+    title: `${customer} - ${record.source} - ${record.type}`,
+    message: sections.join("\n\n").slice(0, 1024),
     priority: "2", retry: "60", expire: "1800",
     url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
     url_title: "View Details"
