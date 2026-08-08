@@ -8,6 +8,11 @@ let lastResetDate = "";
 let pushoverMissingLogged = false;
 const pushoverDeviceMissingLogged = new Set();
 
+function alertBaseUrl() {
+  try { return new URL(process.env.RENDER_EXTERNAL_URL || "https://howards-cloudprnt.onrender.com").origin; }
+  catch { return "https://howards-cloudprnt.onrender.com"; }
+}
+
 function pushoverRequest(method, path, values = {}) {
   const body = new URLSearchParams(values).toString();
   return new Promise((resolve, reject) => {
@@ -50,9 +55,11 @@ async function sendPushover(record) {
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
   const customer = record.customer || "Customer";
   const values = {
-    token, user, title: `${customer} - ${record.source} - ${record.type}`,
-    message: "\u200B",
-    priority: "2", retry: "60", expire: "1800"
+    token, user,
+    message: `${customer}\n${record.source} - ${record.type}`,
+    priority: "2", retry: "60", expire: "1800",
+    url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
+    url_title: "View Details"
   };
   const device = process.env[`PUSHOVER_DEVICE_${record.shop}`];
   if (device) values.device = device;
