@@ -50,8 +50,8 @@ async function sendPushover(record) {
 
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
   return {
-    token, user, title: `New Order - Shop #${record.shop}`,
-    message: `${record.customer || "Customer"}\n${record.source} - ${record.type}`,
+    token, user, title: record.customer || "Customer",
+    message: `${record.source}\n${record.type}`,
     priority: "2", retry: "60", expire: "1800",
     url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
     url_title: "View Order"
