@@ -21,7 +21,7 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     alertSystem._clearForTests();
     const q1=getRouteQueue("print1"),q2=getRouteQueue("print2");
     const token1=enqueueReceipt(Buffer.from("one"),"print1");
-    const first=alertSystem.createShopAlert({shop:1,jobReference:token1,source:"UberEats",type:"Delivery",customer:"Pat",reference:"A1",orderedTime:"07/28/2026 6:18 AM",scheduleType:"ASAP",customerPhone:"+1 901-555-1234",courierPhone:"+1 312-555-5678",items:[{item:"2x Burger $12.00",modifiers:["3x Pickle"]}]});
+    const first=alertSystem.createShopAlert({shop:1,jobReference:token1,source:"UberEats",type:"Delivery",customer:"Pat",reference:"A1",orderedTime:"07/28/2026 6:18 AM",scheduleType:"ASAP",customerPhone:"+1 901-555-1234",courierPhone:"+1 312-555-5678",customerNote:"Payment card 4242",items:[{item:"2x Burger $12.00",modifiers:["3x Pickle"]},{item:"1x Shake",modifiers:["2x Cherry"]}]});
     assert.strictEqual(alertSystem.createShopAlert({shop:1,jobReference:token1,source:"UberEats",type:"Delivery"}).id,first.id);
     const token2=enqueueReceipt(Buffer.from("two"),"print2");
     const second=alertSystem.createShopAlert({shop:2,jobReference:token2,source:"DoorDash",type:"Pickup",items:[{item:"1x Donut",modifiers:[]}]});
@@ -32,7 +32,7 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     const shop1=await request("GET","/api/alert1?key=alert-test-key");
     assert.strictEqual(shop1.status,200);assert.doesNotMatch(shop1.body,new RegExp(second.id));
     const detail=JSON.parse(shop1.body).alerts[0];
-    assert.deepStrictEqual(detail.items,[{item:"2x Burger",modifiers:["3x Pickle"]}]);
+    assert.deepStrictEqual(detail.items,[{item:"2x Burger",modifiers:["3x Pickle"]},{item:"1x Shake",modifiers:["2x Cherry"]}]);
     assert.doesNotMatch(shop1.body,/price|subtotal|tax|tip|total|tender|payment|card/i);
     alertSystem.acknowledgeShopAlert(1,first.id);
     assert.strictEqual(alertSystem.getShopAlerts(1)[0].acknowledged,true);
@@ -56,8 +56,10 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     const page=await request("GET","/alert1?key=alert-test-key");assert.strictEqual(page.status,200);assert.match(page.body,/alert-app\.js/);assert.doesNotMatch(page.body,/ENABLE SOUND|TEST SOUND|ACKNOWLEDGE/i);
     const client=fs.readFileSync(path.join(__dirname,"../public/alert-app.js"),"utf8");assert.match(client,/serviceWorker\?\.register\('\/alert-sw\.js'\)/);assert.match(client,/setInterval\(refresh, 3000\)/);assert.match(client,/VIEW DETAILS/);assert.match(client,/a\.customer \|\| "Customer"/);assert.match(client,/new URLSearchParams\(location\.search\)\.get\("order"\)/);assert.doesNotMatch(client,/Online Order|AudioContext|Oscillator|vibrate|acknowledge|tone|alarm/i);
     const styles=fs.readFileSync(path.join(__dirname,"../public/alert-app.css"),"utf8");assert.match(styles,/grid-template-areas:"name actions" "meta actions"/);assert.match(styles,/padding:16px 18px/);
-    const push=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(push.priority,"2");assert.strictEqual(push.retry,"60");assert.strictEqual(push.expire,"1800");assert.strictEqual(push.title,"New Order - Shop #1");assert.ok(Object.hasOwn(push,"title"));assert.match(push.message,/^Pat\nUberEats - Delivery\n\n/);assert.match(push.message,/Customer Phone: \+1 901-555-1234/);assert.match(push.message,/Courier Phone: \+1 312-555-5678/);assert.match(push.message,/2x Burger/);assert.match(push.message,/3x Pickle/);assert.doesNotMatch(push.message,/\$|subtotal|tax|tip|total|tender|payment|card/i);assert.strictEqual(Object.hasOwn(push,"url"),false);assert.strictEqual(Object.hasOwn(push,"url_title"),false);
-    const push2=alertSystem.buildPushoverValues(second,"token","user");assert.strictEqual(push2.title,"New Order - Shop #2");assert.match(push2.message,/^Customer\nDoorDash - Pickup/);assert.doesNotMatch(push2.message,/Customer Phone:|Courier Phone:|Online Order/);
+    process.env.PUSHOVER_DEVICE_1="front-counter";process.env.PUSHOVER_DEVICE_2="kitchen-tablet";
+    const push=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(push.priority,"2");assert.strictEqual(push.retry,"60");assert.strictEqual(push.expire,"1800");assert.strictEqual(push.title,"New Order - Shop #1");assert.ok(Object.hasOwn(push,"title"));assert.strictEqual(push.device,"front-counter");assert.notStrictEqual(push.device,process.env.PUSHOVER_DEVICE_2);assert.match(push.message,/^Pat\nUberEats - Delivery\n\n/);assert.match(push.message,/Customer Phone: \+1 901-555-1234/);assert.match(push.message,/Courier Phone: \+1 312-555-5678/);assert.match(push.message,/\n\n2x Burger\n    3x Pickle\n\n1x Shake\n    2x Cherry(?:\n|$)/);assert.doesNotMatch(push.message,/\$|subtotal|tax|tip|total|tender|payment|card|4242/i);assert.strictEqual(Object.hasOwn(push,"url"),false);assert.strictEqual(Object.hasOwn(push,"url_title"),false);
+    const push2=alertSystem.buildPushoverValues(second,"token","user");assert.strictEqual(push2.title,"New Order - Shop #2");assert.strictEqual(push2.device,"kitchen-tablet");assert.notStrictEqual(push2.device,process.env.PUSHOVER_DEVICE_1);assert.match(push2.message,/^Customer\nDoorDash - Pickup/);assert.doesNotMatch(push2.message,/Customer Phone:|Courier Phone:|Online Order/);
+    delete process.env.PUSHOVER_DEVICE_1;const fallback=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(fallback.user,"user");assert.strictEqual(Object.hasOwn(fallback,"device"),false);delete process.env.PUSHOVER_DEVICE_2;
     const generic=alertSystem.createShopAlert({shop:1,jobReference:"generic",source:"UberEats",type:"Pickup",customer:"Online Order"});assert.strictEqual(alertSystem.buildPushoverValues(generic,"token","user").message.split("\n")[0],"Customer");assert.notStrictEqual(alertSystem.buildPushoverValues(generic,"token","user").title,"Online Order");
     delete process.env.CLEAR_KEY;assert.strictEqual((await request("GET","/alert1?key=alert-test-key")).status,404);
     console.log("Alert system verification passed (21 focused checks)");
