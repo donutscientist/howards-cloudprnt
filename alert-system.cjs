@@ -6,6 +6,7 @@ const alerts = new Map();
 const listeners = new Map();
 let lastResetDate = "";
 let pushoverMissingLogged = false;
+const pushoverDeviceMissingLogged = new Set();
 
 function pushoverRequest(method, path, values = {}) {
   const body = new URLSearchParams(values).toString();
@@ -36,7 +37,10 @@ async function sendPushover(record) {
     return;
   }
   const values = buildPushoverValues(record, token, user);
-  if (process.env.PUSHOVER_DEVICE) values.device = process.env.PUSHOVER_DEVICE;
+  if (!values.device && !pushoverDeviceMissingLogged.has(record.shop)) {
+    console.log(`No shop-specific Pushover device configured for Shop #${record.shop}; sending to all user devices`);
+    pushoverDeviceMissingLogged.add(record.shop);
+  }
   try {
     const response = await pushoverRequest("POST", "/1/messages.json", values);
     if (response.receipt && shopAlerts(record.shop).includes(record)) record.pushoverReceipt = response.receipt;
@@ -53,16 +57,19 @@ function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = 
   if (record.scheduledTime) details.push(`Scheduled for: ${record.scheduledTime}`);
   if (record.customerPhone) details.push(`Customer Phone: ${record.customerPhone}`);
   if (record.courierPhone) details.push(`Courier Phone: ${record.courierPhone}`);
-  const itemDetails = record.items.flatMap(({ item, modifiers }) => [item, ...modifiers]);
+  const itemDetails = record.items.map(({ item, modifiers }) => [item, ...modifiers.map((modifier) => `    ${modifier}`)].join("\n"));
   const notes = [];
   if (record.customerNote) notes.push(`Customer note: ${record.customerNote}`);
   if (record.fulfillmentNote) notes.push(`Order note: ${record.fulfillmentNote}`);
-  const sections = [header.join("\n"), details.join("\n"), itemDetails.join("\n"), notes.join("\n")].filter(Boolean);
-  return {
+  const sections = [header.join("\n"), details.join("\n"), itemDetails.join("\n\n"), notes.join("\n")].filter(Boolean);
+  const values = {
     token, user, title: `New Order - Shop #${record.shop}`,
     message: sections.join("\n\n").slice(0, 1024),
     priority: "2", retry: "60", expire: "1800"
   };
+  const device = process.env[`PUSHOVER_DEVICE_${record.shop}`];
+  if (device) values.device = device;
+  return values;
 }
 
 async function checkPushoverReceipts() {
@@ -196,6 +203,6 @@ function subscribe(shop, listener) {
   return () => listeners.get(shop)?.delete(listener);
 }
 
-function _clearForTests() { alerts.clear(); lastResetDate = ""; pushoverMissingLogged = false; }
+function _clearForTests() { alerts.clear(); lastResetDate = ""; pushoverMissingLogged = false; pushoverDeviceMissingLogged.clear(); }
 
 module.exports = { createShopAlert, acknowledgeShopAlert, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, subscribe, _clearForTests, MAX_AGE_MS };

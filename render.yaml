@@ -12,3 +12,7 @@ services:
         sync: false
       - key: PUSHOVER_USER
         sync: false
+      - key: PUSHOVER_DEVICE_1
+        sync: false
+      - key: PUSHOVER_DEVICE_2
+        sync: false
