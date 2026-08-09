@@ -32,7 +32,11 @@
     const a = alerts.find(x => x.id === id); if (!a) return; openedOrder = id;
     $("listView").classList.add("hidden"); $("detailView").classList.remove("hidden");
     const totalItems = a.items.reduce((total, item) => total + itemQuantity(item.item), 0);
-    $("detailBody").innerHTML = `<h2 class="customer-name">${escape(a.customer || "Customer")}</h2><div class="detail-meta"><p><strong>Source:</strong> ${escape(a.source)}</p><p><strong>Type:</strong> ${escape(a.type)}</p>${a.reference ? `<p><strong>Order:</strong> ${escape(a.reference)}</p>` : ""}<p><strong>Ordered on:</strong> ${escape(a.orderedTime || a.receivedTime)}</p>${a.scheduleType ? `<p><strong>Schedule:</strong> ${escape(a.scheduleType)}</p>` : ""}${a.scheduledTime ? `<p><strong>Scheduled time:</strong> ${escape(a.scheduledTime)}</p>` : ""}${a.customerPhone ? `<p><strong>Customer phone:</strong> ${escape(a.customerPhone)}</p>` : ""}${a.courierPhone ? `<p><strong>Courier phone:</strong> ${escape(a.courierPhone)}</p>` : ""}</div><h2 class="items-heading">Total: ${escape(totalItems)} Items</h2><div class="item-list">${a.items.map(i => `<div class="item"><div class="item-name">${escape(i.item)}</div>${i.modifiers.length ? `<div class="modifiers">${i.modifiers.map(m => `<div class="modifier">${escape(m)}</div>`).join("")}</div>` : ""}</div>`).join("")}</div>${a.customerNote ? `<p><strong>Customer note:</strong> ${escape(a.customerNote)}</p>` : ""}${a.fulfillmentNote ? `<p><strong>Order note:</strong> ${escape(a.fulfillmentNote)}</p>` : ""}`;
+    $("detailBody").innerHTML = `<div class="customer-details"><h2 class="customer-name">${escape(a.customer || "Customer")}</h2><div class="detail-meta"><p>${escape(a.source)} - ${escape(a.type)}</p><p>Ordered on: ${escape(a.orderedTime || a.receivedTime)}</p>${a.reference ? `<p>Order ID: ${escape(a.reference)}</p>` : ""}${a.scheduledTime || a.scheduleType ? `<p>Schedule: ${escape(a.scheduledTime || a.scheduleType)}</p>` : ""}</div><hr class="detail-separator"></div><h2 class="items-heading">Total: ${escape(totalItems)} Items</h2><div class="item-list">${a.items.map(i => `<div class="item"><div class="item-name">${escape(i.item)}</div>${i.modifiers.length ? `<div class="modifiers">${i.modifiers.map(m => `<div class="modifier">${escape(m)}</div>`).join("")}</div>` : ""}</div>`).join("")}</div>${a.customerNote ? `<p><strong>Customer note:</strong> ${escape(a.customerNote)}</p>` : ""}${a.fulfillmentNote ? `<p><strong>Order note:</strong> ${escape(a.fulfillmentNote)}</p>` : ""}`;
+  }
+  function closeDetail() {
+    openedOrder = ""; $("detailView").classList.add("hidden"); $("listView").classList.remove("hidden");
+    history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}`);
   }
   async function setStatus(id, status) {
     const response = await fetch(`/api/alert${shop}/${encodeURIComponent(id)}/${status}?key=${encodeURIComponent(key)}`, { method: "POST" });
@@ -47,8 +51,8 @@
     const card = e.target.closest("[data-order]"); if (card) view(card.dataset.order);
   };
   $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); view(e.target.dataset.order); } };
-  $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; selectedTab = e.target.dataset.tab; render(); };
-  $("back").onclick = () => { openedOrder = ""; $("detailView").classList.add("hidden"); $("listView").classList.remove("hidden"); history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}`); };
+  $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; selectedTab = e.target.dataset.tab; closeDetail(); render(); };
+  $("back").onclick = closeDetail;
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
   window.addEventListener("online", refresh); $("shop").textContent = `Shop #${shop}`;
   document.querySelector('link[rel="manifest"]').href = `/alert${shop}/manifest.webmanifest?key=${encodeURIComponent(key)}`;
