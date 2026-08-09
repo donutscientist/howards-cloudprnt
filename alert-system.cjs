@@ -54,17 +54,6 @@ async function sendPushover(record) {
 
 function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
   const customer = record.customer || "Customer";
-  const header = [customer, `${record.source} - ${record.type}`];
-  const orderDetails = [];
-  if (record.reference) orderDetails.push(`Order #${record.reference}`);
-  if (record.scheduleType) orderDetails.push(`Schedule: ${record.scheduleType}`);
-  if (record.orderedTime) orderDetails.push(`Ordered on: ${record.orderedTime}`);
-  if (record.scheduledTime) orderDetails.push(`Scheduled for: ${record.scheduledTime}`);
-
-  const phones = [];
-  if (record.customerPhone) phones.push(`Customer Phone: ${record.customerPhone}`);
-  if (record.courierPhone) phones.push(`Courier Phone: ${record.courierPhone}`);
-
   const totalItems = record.items.reduce((total, { item }) => {
     const quantity = Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
     return total + quantity;
@@ -74,9 +63,6 @@ function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = 
     ...modifiers.map((modifier) => `    ${modifier}`)
   ].join("\n"));
   const sections = [
-    header.join("\n"),
-    orderDetails.join("\n"),
-    phones.join("\n"),
     `Total: ${totalItems} Items`,
     itemDetails.join("\n\n")
   ].filter(Boolean);
@@ -170,11 +156,26 @@ function createShopAlert(data) {
     scheduleType: safeText(data.scheduleType, 40), scheduledTime: safeText(data.scheduledTime, 100),
     customerPhone: safePhone(data.customerPhone), courierPhone: safePhone(data.courierPhone),
     customerNote: safeNote(data.customerNote), fulfillmentNote: safeNote(data.fulfillmentNote),
-    items: safeItems(data.items), acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, jobReference
+    items: safeItems(data.items), status: "active", completedAt: null,
+    acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, jobReference
   };
   records.unshift(record);
   notify(shop);
   void sendPushover(record);
+  return record;
+}
+
+function setShopAlertStatus(shop, id, status, now = new Date()) {
+  pruneOldAlerts(now.getTime());
+  if (status !== "active" && status !== "complete") throw new Error("Invalid alert status");
+  const numericShop = Number(shop);
+  const record = shopAlerts(numericShop).find((entry) => entry.id === id);
+  if (!record) return null;
+  if (record.status !== status) {
+    record.status = status;
+    record.completedAt = status === "complete" ? now.toISOString() : null;
+    notify(numericShop);
+  }
   return record;
 }
 
@@ -226,4 +227,4 @@ function subscribe(shop, listener) {
 
 function _clearForTests() { alerts.clear(); lastResetDate = ""; pushoverMissingLogged = false; pushoverDeviceMissingLogged.clear(); }
 
-module.exports = { createShopAlert, acknowledgeShopAlert, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, subscribe, _clearForTests, MAX_AGE_MS };
+module.exports = { createShopAlert, acknowledgeShopAlert, setShopAlertStatus, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, subscribe, _clearForTests, MAX_AGE_MS };
