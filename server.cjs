@@ -1177,9 +1177,10 @@ function alertShopFromRequest(req) {
 function publicAlert(record) {
   return {
     id: record.id, shop: record.shop, createdAt: record.createdAt,
+    status: record.status, completedAt: record.completedAt,
     receivedTime: businessDateParts(record.createdAt).time, source: record.source, type: record.type,
     customer: record.customer, reference: record.reference, orderedTime: record.orderedTime, scheduleType: record.scheduleType,
-    scheduledTime: record.scheduledTime, customerNote: record.customerNote,
+    scheduledTime: record.scheduledTime, customerPhone: record.customerPhone, courierPhone: record.courierPhone, customerNote: record.customerNote,
     fulfillmentNote: record.fulfillmentNote, items: record.items
   };
 }
@@ -1188,7 +1189,7 @@ app.get(/^\/alert(\d+)$/, (req, res) => {
   req.params.shop = req.params[0];
   if (!authenticateAlert(req, res) || !alertShopFromRequest(req)) return;
   res.setHeader("Cache-Control", "no-store");
-  res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#091018"><meta name="apple-mobile-web-app-capable" content="yes"><title>Howard's Orders</title><link rel="manifest"><link rel="icon" href="/alert-icon.svg"><link rel="stylesheet" href="/alert-app.css"></head><body><header><h1>HOWARD'S ORDERS</h1><div id="shop" class="shop"></div><div>STATUS: <span id="status" class="status reconnecting">RECONNECTING</span></div></header><main><section id="listView"><div id="alerts"></div></section><section id="detailView" class="hidden details"><button id="back">BACK TO ORDERS</button><div id="detailBody"></div></section></main><script src="/alert-app.js" defer></script></body></html>`);
+  res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#091018"><meta name="apple-mobile-web-app-capable" content="yes"><title>Howard's Orders</title><link rel="manifest"><link rel="icon" href="/alert-icon.svg"><link rel="stylesheet" href="/alert-app.css"></head><body><header><h1>HOWARD'S ORDERS</h1><div id="shop" class="shop"></div><div>STATUS: <span id="status" class="status reconnecting">RECONNECTING</span></div><nav id="orderTabs" aria-label="Order status"><button data-tab="active" class="selected">Active</button><button data-tab="complete">Complete</button></nav></header><main><section id="listView"><div id="alerts"></div></section><section id="detailView" class="hidden details"><button id="back">BACK TO ORDERS</button><div id="detailBody"></div></section></main><script src="/alert-app.js" defer></script></body></html>`);
 });
 
 app.get(/^\/api\/alert(\d+)$/, (req, res) => {
@@ -1198,6 +1199,17 @@ app.get(/^\/api\/alert(\d+)$/, (req, res) => {
   if (!shop) return res.status(404).send("Not found");
   res.setHeader("Cache-Control", "no-store");
   res.json({ shop, alerts: alertSystem.getShopAlerts(shop).map(publicAlert) });
+});
+
+app.post(/^\/api\/alert(\d+)\/([a-f0-9]+)\/(active|complete)$/, (req, res) => {
+  req.params.shop = req.params[0];
+  if (!authenticateAlert(req, res)) return;
+  const shop = alertShopFromRequest(req);
+  if (!shop) return res.status(404).send("Not found");
+  const record = alertSystem.setShopAlertStatus(shop, req.params[1], req.params[2]);
+  if (!record) return res.status(404).send("Order not found");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ alert: publicAlert(record) });
 });
 
 app.get(/^\/alert(\d+)\/manifest\.webmanifest$/, (req, res) => {
