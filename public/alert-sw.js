@@ -18,7 +18,7 @@ self.addEventListener("push", event => {
   let data = {};
   try { data = event.data?.json() || {}; } catch { data = {}; }
   if (!data.title || !data.shop || !data.order) return;
-  event.waitUntil(self.registration.showNotification(data.title, { body: data.body || "New order", icon: "/alert-icon.svg", badge: "/alert-icon.svg", tag: `shop-${data.shop}-order-${data.order}`, data: { shop: Number(data.shop), order: String(data.order) } }));
+  event.waitUntil(self.registration.showNotification(data.title, { body: data.body || "New order", icon: "/alert-icon.svg", badge: "/alert-icon.svg", tag: `shop-${data.shop}-order-${data.order}`, vibrate: [300, 150, 300, 150, 500], data: { shop: Number(data.shop), order: String(data.order) } }));
 });
 self.addEventListener("notificationclick", event => {
   event.notification.close();
