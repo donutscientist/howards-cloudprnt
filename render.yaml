@@ -16,3 +16,9 @@ services:
         sync: false
       - key: PUSHOVER_DEVICE_2
         sync: false
+      - key: WEB_PUSH_PUBLIC_KEY
+        sync: false
+      - key: WEB_PUSH_PRIVATE_KEY
+        sync: false
+      - key: WEB_PUSH_SUBJECT
+        sync: false
