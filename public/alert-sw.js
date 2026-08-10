@@ -1,4 +1,4 @@
-const CACHE = "howards-alert-v5";
+const CACHE = "howards-alert-v6";
 const CONFIG_CACHE = "howards-alert-config";
 const ASSETS = ["/alert-app.css", "/order-alarm.js", "/alert-app.js", "/alert-icon.svg"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));

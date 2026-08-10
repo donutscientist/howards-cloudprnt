@@ -16,6 +16,19 @@
     gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + .65);
     oscillator.connect(gain).connect(audioContext.destination); oscillator.start(); oscillator.stop(audioContext.currentTime + .65);
   }
+  function playUiClick() {
+    try {
+      if (!audioUnlocked || !audioContext || audioContext.state !== "running") return;
+      const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(520, audioContext.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(390, audioContext.currentTime + .055);
+      gain.gain.setValueAtTime(.045, audioContext.currentTime);
+      gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + .06);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(); oscillator.stop(audioContext.currentTime + .06);
+    } catch {}
+  }
   const orderAlarm = OrderAlarm.createOrderAlarmController(playOrderTone);
   function syncAlarm() { orderAlarm.update(alerts, document.visibilityState !== "hidden"); }
   function unlockAudio() {
@@ -34,7 +47,7 @@
     $("orderTabs").querySelector('[data-tab="active"]').textContent = `Active (${activeCount})`;
     $("orderTabs").querySelector('[data-tab="complete"]').textContent = `Complete (${completeCount})`;
     $("orderTabs").querySelectorAll("button").forEach(button => button.classList.toggle("selected", button.dataset.tab === selectedTab));
-    $("alerts").innerHTML = records.length ? records.map(a => `<article class="alert${!a.acknowledged ? " unacknowledged" : ""}" data-order="${a.id}" tabindex="0" role="button" aria-label="Open order for ${escape(a.customer || "Customer")}"><h2>${escape(a.customer || "Customer")} - ${escape(orderedTime(a))}</h2><div class="meta">${escape(a.source)} - ${escape(a.type)}</div><div class="actions"><button data-status="${selectedTab === "active" ? "complete" : "active"}" data-id="${a.id}">${selectedTab === "active" ? "PICKED UP" : "UNDO"}</button></div></article>`).join("") : `<div class="empty">No ${selectedTab} orders.</div>`;
+    $("alerts").innerHTML = records.length ? records.map(a => `<article class="alert${a.status === "active" && !a.acknowledged ? " unacknowledged" : ""}" data-order="${a.id}" tabindex="0" role="button" aria-label="Open order for ${escape(a.customer || "Customer")}"><h2>${escape(a.customer || "Customer")} - ${escape(orderedTime(a))}</h2><div class="meta">${escape(a.source)} - ${escape(a.type)}</div><div class="actions"><button data-status="${selectedTab === "active" ? "complete" : "active"}" data-id="${a.id}">${selectedTab === "active" ? "PICKED UP" : "UNDO"}</button></div></article>`).join("") : `<div class="empty">No ${selectedTab} orders.</div>`;
     syncAlarm();
   }
   async function refresh() {
@@ -92,12 +105,13 @@
   }
   $("alerts").onclick = e => {
     const action = e.target.closest("button[data-status]");
-    if (action) { e.stopPropagation(); void setStatus(action.dataset.id, action.dataset.status); return; }
-    const card = e.target.closest("[data-order]"); if (card) void openOrder(card.dataset.order);
+    if (action) { e.stopPropagation(); playUiClick(); void setStatus(action.dataset.id, action.dataset.status); return; }
+    const card = e.target.closest("[data-order]"); if (card) { playUiClick(); void openOrder(card.dataset.order); }
   };
-  $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); void openOrder(e.target.dataset.order); } };
-  $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; selectedTab = e.target.dataset.tab; closeDetail(); render(); };
-  $("detailAction").onclick = async e => { await setStatus(e.target.dataset.id, e.target.dataset.status); selectedTab = e.target.dataset.status; closeDetail(); render(); };
+  $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); playUiClick(); void openOrder(e.target.dataset.order); } };
+  $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; playUiClick(); selectedTab = e.target.dataset.tab; closeDetail(); render(); };
+  $("refreshOrders").onclick = () => { playUiClick(); void refresh(); };
+  $("detailAction").onclick = async e => { playUiClick(); await setStatus(e.target.dataset.id, e.target.dataset.status); selectedTab = e.target.dataset.status; closeDetail(); render(); };
   navigator.serviceWorker?.addEventListener("message", event => { if (event.data?.type === "open-order" && event.data.shop === shop) { history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}&order=${encodeURIComponent(event.data.order)}`); void refresh(); } });
   document.addEventListener("visibilitychange", () => { syncAlarm(); if (document.visibilityState === "visible") void refresh(); });
   window.addEventListener("pageshow", () => { syncAlarm(); void refresh(); });

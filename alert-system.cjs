@@ -1,5 +1,4 @@
 const crypto = require("crypto");
-const https = require("https");
 const webPush = require("./web-push.cjs");
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -8,95 +7,6 @@ const listeners = new Map();
 const pushSubscriptions = new Map();
 let pushTransport = webPush.send;
 let lastResetDate = "";
-let pushoverMissingLogged = false;
-const pushoverDeviceMissingLogged = new Set();
-
-function alertBaseUrl() {
-  try { return new URL(process.env.RENDER_EXTERNAL_URL || "https://howards-cloudprnt.onrender.com").origin; }
-  catch { return "https://howards-cloudprnt.onrender.com"; }
-}
-
-function pushoverRequest(method, path, values = {}) {
-  const body = new URLSearchParams(values).toString();
-  return new Promise((resolve, reject) => {
-    const request = https.request({ hostname: "api.pushover.net", method, path, headers: body ? {
-      "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body)
-    } : {} }, (response) => {
-      let data = "";
-      response.on("data", (chunk) => data += chunk);
-      response.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (response.statusCode < 200 || response.statusCode >= 300 || parsed.status !== 1) return reject(new Error(`Pushover API ${response.statusCode}`));
-          resolve(parsed);
-        } catch { reject(new Error(`Pushover API ${response.statusCode}`)); }
-      });
-    });
-    request.on("error", reject);
-    if (body) request.write(body);
-    request.end();
-  });
-}
-
-async function sendPushover(record) {
-  const token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER;
-  if (!token || !user) {
-    if (!pushoverMissingLogged) { console.log("Pushover is not configured; notifications are disabled"); pushoverMissingLogged = true; }
-    return;
-  }
-  const values = buildPushoverValues(record, token, user);
-  if (!values.device && !pushoverDeviceMissingLogged.has(record.shop)) {
-    console.log(`No shop-specific Pushover device configured for Shop #${record.shop}; sending to all user devices`);
-    pushoverDeviceMissingLogged.add(record.shop);
-  }
-  try {
-    const response = await pushoverRequest("POST", "/1/messages.json", values);
-    if (response.receipt && shopAlerts(record.shop).includes(record)) record.pushoverReceipt = response.receipt;
-  } catch (error) { console.error(`Pushover delivery failed: ${error.message}`); }
-}
-
-function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = process.env.PUSHOVER_USER) {
-  const customer = record.customer || "Customer";
-  const totalItems = record.items.reduce((total, { item }) => {
-    const quantity = Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
-    return total + quantity;
-  }, 0);
-  const itemDetails = record.items.map(({ item, modifiers }) => [
-    item,
-    ...modifiers.map((modifier) => `    ${modifier}`)
-  ].join("\n"));
-  const sections = [
-    `Total: ${totalItems} Items`,
-    itemDetails.join("\n\n")
-  ].filter(Boolean);
-  const values = {
-    token, user,
-    title: `${customer} - ${record.source} - ${record.type}`,
-    message: sections.join("\n\n").slice(0, 1024),
-    priority: "2", retry: "60", expire: "1800",
-    url: `${alertBaseUrl()}/alert${record.shop}?key=${encodeURIComponent(process.env.CLEAR_KEY || "")}&order=${encodeURIComponent(record.id)}`,
-    url_title: "View Details"
-  };
-  const device = process.env[`PUSHOVER_DEVICE_${record.shop}`];
-  if (device) values.device = device;
-  return values;
-}
-
-async function checkPushoverReceipts() {
-  const token = process.env.PUSHOVER_TOKEN;
-  if (!token) return;
-  const active = Array.from(alerts.values()).flat().filter((record) => record.pushoverReceipt && !record.pushoverAcknowledged);
-  await Promise.all(active.map(async (record) => {
-    try {
-      const response = await pushoverRequest("GET", `/1/receipts/${encodeURIComponent(record.pushoverReceipt)}.json?token=${encodeURIComponent(token)}`);
-      if (response.acknowledged === 1) {
-        record.pushoverAcknowledged = true;
-        record.pushoverAcknowledgedAt = new Date(Number(response.acknowledged_at || 0) * 1000 || Date.now()).toISOString();
-      }
-    } catch (error) { console.error(`Pushover receipt check failed: ${error.message}`); }
-  }));
-}
-
 function shopAlerts(shop) {
   if (!alerts.has(shop)) alerts.set(shop, []);
   return alerts.get(shop);
@@ -198,12 +108,11 @@ function createShopAlert(data) {
     customerPhone: safePhone(data.customerPhone), courierPhone: safePhone(data.courierPhone),
     customerNote: safeNote(data.customerNote), fulfillmentNote: safeNote(data.fulfillmentNote),
     items: safeItems(data.items), status: "active", completedAt: null,
-    acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, pushoverAcknowledged: false, pushoverAcknowledgedAt: null, jobReference
+    acknowledged: false, acknowledgedAt: null, jobReference
   };
   records.unshift(record);
   notify(shop);
   void sendWebPush(record);
-  void sendPushover(record);
   return record;
 }
 
@@ -216,6 +125,10 @@ function setShopAlertStatus(shop, id, status, now = new Date()) {
   if (record.status !== status) {
     record.status = status;
     record.completedAt = status === "complete" ? now.toISOString() : null;
+    if (status === "complete" && !record.acknowledged) {
+      record.acknowledged = true;
+      record.acknowledgedAt = now.toISOString();
+    }
     notify(numericShop);
   }
   return record;
@@ -267,7 +180,7 @@ function subscribe(shop, listener) {
   return () => listeners.get(shop)?.delete(listener);
 }
 
-function _clearForTests() { alerts.clear(); pushSubscriptions.clear(); pushTransport = webPush.send; lastResetDate = ""; pushoverMissingLogged = false; pushoverDeviceMissingLogged.clear(); }
+function _clearForTests() { alerts.clear(); pushSubscriptions.clear(); pushTransport = webPush.send; lastResetDate = ""; }
 function _setPushTransportForTests(transport) { pushTransport = transport; }
 
-module.exports = { createShopAlert, acknowledgeShopAlert, setShopAlertStatus, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, registerPushSubscription, removePushSubscription, getPushSubscriptions, buildWebPushPayload, sendWebPush, subscribe, _clearForTests, _setPushTransportForTests, MAX_AGE_MS };
+module.exports = { createShopAlert, acknowledgeShopAlert, setShopAlertStatus, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, registerPushSubscription, removePushSubscription, getPushSubscriptions, buildWebPushPayload, sendWebPush, subscribe, _clearForTests, _setPushTransportForTests, MAX_AGE_MS };
