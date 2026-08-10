@@ -8,14 +8,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 18
-      - key: PUSHOVER_TOKEN
-        sync: false
-      - key: PUSHOVER_USER
-        sync: false
-      - key: PUSHOVER_DEVICE_1
-        sync: false
-      - key: PUSHOVER_DEVICE_2
-        sync: false
       - key: WEB_PUSH_PUBLIC_KEY
         sync: false
       - key: WEB_PUSH_PRIVATE_KEY
