@@ -1,9 +1,12 @@
 const crypto = require("crypto");
 const https = require("https");
+const webPush = require("./web-push.cjs");
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const alerts = new Map();
 const listeners = new Map();
+const pushSubscriptions = new Map();
+let pushTransport = webPush.send;
 let lastResetDate = "";
 let pushoverMissingLogged = false;
 const pushoverDeviceMissingLogged = new Set();
@@ -82,11 +85,14 @@ function buildPushoverValues(record, token = process.env.PUSHOVER_TOKEN, user = 
 async function checkPushoverReceipts() {
   const token = process.env.PUSHOVER_TOKEN;
   if (!token) return;
-  const active = Array.from(alerts.values()).flat().filter((record) => record.pushoverReceipt && !record.acknowledged);
+  const active = Array.from(alerts.values()).flat().filter((record) => record.pushoverReceipt && !record.pushoverAcknowledged);
   await Promise.all(active.map(async (record) => {
     try {
       const response = await pushoverRequest("GET", `/1/receipts/${encodeURIComponent(record.pushoverReceipt)}.json?token=${encodeURIComponent(token)}`);
-      if (response.acknowledged === 1) acknowledgeShopAlert(record.shop, record.id, new Date(Number(response.acknowledged_at || 0) * 1000 || Date.now()));
+      if (response.acknowledged === 1) {
+        record.pushoverAcknowledged = true;
+        record.pushoverAcknowledgedAt = new Date(Number(response.acknowledged_at || 0) * 1000 || Date.now()).toISOString();
+      }
     } catch (error) { console.error(`Pushover receipt check failed: ${error.message}`); }
   }));
 }
@@ -124,6 +130,41 @@ function notify(shop) {
   for (const listener of listeners.get(shop) || []) listener();
 }
 
+function shopPushSubscriptions(shop) {
+  const numericShop = Number(shop);
+  if (!pushSubscriptions.has(numericShop)) pushSubscriptions.set(numericShop, new Map());
+  return pushSubscriptions.get(numericShop);
+}
+
+function registerPushSubscription(shop, subscription) {
+  const numericShop = Number(shop);
+  const endpoint = safeText(subscription?.endpoint, 2000);
+  const p256dh = safeText(subscription?.keys?.p256dh, 200);
+  const auth = safeText(subscription?.keys?.auth, 100);
+  if (!Number.isInteger(numericShop) || numericShop < 1 || !endpoint || !p256dh || !auth) throw new Error("Invalid push subscription");
+  const record = { endpoint, expirationTime: subscription.expirationTime || null, keys: { p256dh, auth } };
+  for (const subscriptions of pushSubscriptions.values()) subscriptions.delete(endpoint);
+  shopPushSubscriptions(numericShop).set(endpoint, record);
+  return record;
+}
+
+function removePushSubscription(shop, endpoint) { return shopPushSubscriptions(Number(shop)).delete(String(endpoint)); }
+function getPushSubscriptions(shop) { return Array.from(shopPushSubscriptions(Number(shop)).values()).map(value => ({ ...value, keys: { ...value.keys } })); }
+
+function buildWebPushPayload(record) {
+  return { title: `New Order - Shop #${record.shop}`, body: `${record.customer || "Customer"}\n${record.source} - ${record.type}`, shop: record.shop, order: record.id };
+}
+
+async function sendWebPush(record) {
+  const payload = buildWebPushPayload(record);
+  await Promise.all(getPushSubscriptions(record.shop).map(async (subscription) => {
+    try {
+      const response = await pushTransport(subscription, payload);
+      if ([404, 410].includes(response?.statusCode)) removePushSubscription(record.shop, subscription.endpoint);
+    } catch (error) { console.error(`Web Push delivery failed: ${error.message}`); }
+  }));
+}
+
 function pruneOldAlerts(now = Date.now()) {
   for (const [shop, records] of alerts) {
     const kept = records.filter((record) => now - new Date(record.createdAt).getTime() < MAX_AGE_MS);
@@ -157,10 +198,11 @@ function createShopAlert(data) {
     customerPhone: safePhone(data.customerPhone), courierPhone: safePhone(data.courierPhone),
     customerNote: safeNote(data.customerNote), fulfillmentNote: safeNote(data.fulfillmentNote),
     items: safeItems(data.items), status: "active", completedAt: null,
-    acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, jobReference
+    acknowledged: false, acknowledgedAt: null, pushoverReceipt: null, pushoverAcknowledged: false, pushoverAcknowledgedAt: null, jobReference
   };
   records.unshift(record);
   notify(shop);
+  void sendWebPush(record);
   void sendPushover(record);
   return record;
 }
@@ -225,6 +267,7 @@ function subscribe(shop, listener) {
   return () => listeners.get(shop)?.delete(listener);
 }
 
-function _clearForTests() { alerts.clear(); lastResetDate = ""; pushoverMissingLogged = false; pushoverDeviceMissingLogged.clear(); }
+function _clearForTests() { alerts.clear(); pushSubscriptions.clear(); pushTransport = webPush.send; lastResetDate = ""; pushoverMissingLogged = false; pushoverDeviceMissingLogged.clear(); }
+function _setPushTransportForTests(transport) { pushTransport = transport; }
 
-module.exports = { createShopAlert, acknowledgeShopAlert, setShopAlertStatus, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, subscribe, _clearForTests, MAX_AGE_MS };
+module.exports = { createShopAlert, acknowledgeShopAlert, setShopAlertStatus, getShopAlerts, resetAlertHistory, pruneOldAlerts, runAlertMaintenance, checkPushoverReceipts, buildPushoverValues, registerPushSubscription, removePushSubscription, getPushSubscriptions, buildWebPushPayload, sendWebPush, subscribe, _clearForTests, _setPushTransportForTests, MAX_AGE_MS };

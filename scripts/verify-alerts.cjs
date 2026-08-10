@@ -14,17 +14,30 @@ process.env.REFRESH_TOKEN = "test";
 const { app, enqueueReceipt, getRouteQueue, alertSystem } = require("../server.cjs");
 const server = app.listen(0);
 const port = server.address().port;
-function request(method, url) { return new Promise((resolve, reject) => { const req=http.request({port,method,path:url},res=>{const chunks=[];res.on("data",c=>chunks.push(c));res.on("end",()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}))});req.on("error",reject);req.end() }) }
+function request(method, url, body = "") { return new Promise((resolve, reject) => { const req=http.request({port,method,path:url,headers:body?{"Content-Type":"application/json","Content-Length":Buffer.byteLength(body)}:{}},res=>{const chunks=[];res.on("data",c=>chunks.push(c));res.on("end",()=>resolve({status:res.statusCode,body:Buffer.concat(chunks).toString()}))});req.on("error",reject);if(body)req.write(body);req.end() }) }
 
 (async () => {
   try {
     alertSystem._clearForTests();
+    const subscription1={endpoint:"https://push.example/shop1",keys:{p256dh:"shop1-public-key",auth:"shop1-auth"}};
+    const subscription2={endpoint:"https://push.example/shop2",keys:{p256dh:"shop2-public-key",auth:"shop2-auth"}};
+    assert.strictEqual((await request("POST","/api/alert1/push-subscription?key=alert-test-key",JSON.stringify(subscription1))).status,201);
+    assert.strictEqual((await request("POST","/api/alert2/push-subscription?key=alert-test-key",JSON.stringify(subscription2))).status,201);
+    await request("POST","/api/alert1/push-subscription?key=alert-test-key",JSON.stringify(subscription1));
+    assert.strictEqual(alertSystem.getPushSubscriptions(1).length,1);assert.strictEqual(alertSystem.getPushSubscriptions(2).length,1);
+    const webPushes=[];
+    alertSystem._setPushTransportForTests(async(subscription,payload)=>{webPushes.push({endpoint:subscription.endpoint,payload,activeBeforeSend:alertSystem.getShopAlerts(payload.shop).some(a=>a.id===payload.order)});return {statusCode:201}});
     const q1=getRouteQueue("print1"),q2=getRouteQueue("print2");
     const token1=enqueueReceipt(Buffer.from("one"),"print1");
     const first=alertSystem.createShopAlert({shop:1,jobReference:token1,source:"UberEats",type:"Delivery",customer:"Pat",reference:"A1",orderedTime:"07/28/2026 6:18 AM",scheduleType:"ASAP",customerPhone:"+1 901-555-1234",courierPhone:"+1 312-555-5678",customerNote:"Payment card 4242",items:[{item:"2x Burger $12.00",modifiers:["3x Pickle"]},{item:"1x Shake",modifiers:["2x Cherry"]}]});
     assert.strictEqual(alertSystem.createShopAlert({shop:1,jobReference:token1,source:"UberEats",type:"Delivery"}).id,first.id);
     const token2=enqueueReceipt(Buffer.from("two"),"print2");
     const second=alertSystem.createShopAlert({shop:2,jobReference:token2,source:"DoorDash",type:"Pickup",items:[{item:"1x Donut",modifiers:[]}]});
+    assert.deepStrictEqual(webPushes.map(push=>push.endpoint),[subscription1.endpoint,subscription2.endpoint]);
+    assert.ok(webPushes.every(push=>push.activeBeforeSend));
+    assert.strictEqual(webPushes[0].payload.title,"New Order - Shop #1");assert.strictEqual(webPushes[0].payload.body,"Pat\nUberEats - Delivery");
+    assert.deepStrictEqual(Object.keys(webPushes[0].payload).sort(),["body","order","shop","title"]);assert.doesNotMatch(webPushes.map(push=>`${push.payload.title}\n${push.payload.body}`).join("\n"),/\$|price|payment|tender|card|A1/iu);
+    assert.strictEqual(webPushes[0].payload.order,first.id);assert.notStrictEqual(webPushes[0].payload.order,token1);
     assert.strictEqual(alertSystem.getShopAlerts(1).length,1);
     assert.strictEqual(alertSystem.getShopAlerts(2).length,1);
     assert.strictEqual(first.acknowledged,false);
@@ -32,7 +45,7 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     const shop1=await request("GET","/api/alert1?key=alert-test-key");
     assert.strictEqual(shop1.status,200);assert.doesNotMatch(shop1.body,new RegExp(second.id));
     const detail=JSON.parse(shop1.body).alerts[0];
-    assert.strictEqual(detail.status,"active");assert.strictEqual(detail.completedAt,null);
+    assert.strictEqual(detail.status,"active");assert.strictEqual(detail.completedAt,null);assert.strictEqual(detail.acknowledged,false);
     assert.deepStrictEqual(detail.items,[{item:"2x Burger",modifiers:["3x Pickle"]},{item:"1x Shake",modifiers:["2x Cherry"]}]);
     assert.doesNotMatch(shop1.body,/price|subtotal|tax|tip|total|tender|payment|card/i);
     alertSystem.acknowledgeShopAlert(1,first.id);
@@ -49,6 +62,7 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     assert.strictEqual(undone.status,200);assert.strictEqual(JSON.parse(undone.body).alert.status,"active");
     assert.strictEqual(alertSystem.getShopAlerts(1).filter(a=>a.id===first.id).length,1);assert.strictEqual(alertSystem.getShopAlerts(1)[0].completedAt,null);
     assert.strictEqual(first.pushoverReceipt,null);
+    assert.strictEqual(webPushes.length,2);
     const third=alertSystem.createShopAlert({shop:1,jobReference:"three",source:"GrubHub",type:"Pickup"});
     const fourth=alertSystem.createShopAlert({shop:1,jobReference:"four",source:"UberEats",type:"Pickup"});
     assert.strictEqual(alertSystem.getShopAlerts(1).filter(a=>!a.acknowledged).length,2);
@@ -65,15 +79,17 @@ function request(method, url) { return new Promise((resolve, reject) => { const 
     const manifestResponse=await request("GET","/alert1/manifest.webmanifest?key=alert-test-key");
     const manifest=JSON.parse(manifestResponse.body);assert.strictEqual(manifest.display,"standalone");assert.match(manifest.start_url,/^\/alert1\?key=/);assert.ok(manifest.icons.length);
     const page=await request("GET","/alert1?key=alert-test-key");assert.strictEqual(page.status,200);assert.match(page.body,/alert-app\.js/);assert.doesNotMatch(page.body,/ENABLE SOUND|TEST SOUND|ACKNOWLEDGE/i);
-    const client=fs.readFileSync(path.join(__dirname,"../public/alert-app.js"),"utf8");assert.match(client,/serviceWorker\?\.register\('\/alert-sw\.js'\)/);assert.match(client,/setInterval\(refresh, 3000\)/);assert.doesNotMatch(client,/VIEW DETAILS/);assert.match(client,/PICKED UP/);assert.match(client,/UNDO/);assert.match(client,/data-order=/);assert.match(client,/e\.stopPropagation\(\)/);assert.match(client,/if \(action\).*return/);assert.match(client,/a\.customer \|\| "Customer"/);assert.match(client,/new URLSearchParams\(location\.search\)\.get\("order"\)/);assert.match(client,/alerts\.find\(x => x\.id === id\)/);assert.match(client,/Total: \$\{escape\(totalItems\)\} Items/);assert.match(client,/reduce\(\(total, item\) => total \+ itemQuantity\(item\.item\), 0\)/);assert.match(client,/a\.status === selectedTab/);assert.doesNotMatch(client,/<ul>|<li>|•|○|Online Order|AudioContext|Oscillator|vibrate|acknowledge|tone|alarm/i);
-    const styles=fs.readFileSync(path.join(__dirname,"../public/alert-app.css"),"utf8");assert.match(styles,/grid-template-areas:"name actions" "meta actions"/);assert.match(styles,/padding:16px 18px/);assert.match(styles,/\.details\{[^}]*padding:11px[^}]*font-size:14px/);assert.match(styles,/\.modifiers\{[^}]*margin-left:1\.5em/);
+    const client=fs.readFileSync(path.join(__dirname,"../public/alert-app.js"),"utf8");assert.match(client,/serviceWorker\?\.register\("\/alert-sw\.js"\)/);assert.match(client,/setInterval\(refresh, 3000\)/);assert.doesNotMatch(client,/VIEW DETAILS|BACK TO ORDERS/);assert.match(client,/PICKED UP/);assert.match(client,/UNDO/);assert.match(client,/data-order=/);assert.match(client,/e\.stopPropagation\(\)/);assert.match(client,/if \(action\).*return/);assert.match(client,/a\.customer \|\| "Customer"/);assert.match(client,/new URLSearchParams\(location\.search\)\.get\("order"\)/);assert.match(client,/alerts\.find\(x => x\.id === id\)/);assert.match(client,/Total: \$\{escape\(totalItems\)\} Items/);assert.match(client,/reduce\(\(total, item\) => total \+ itemQuantity\(item\.item\), 0\)/);assert.match(client,/a\.status === selectedTab/);assert.match(client,/!a\.acknowledged \? " unacknowledged"/);assert.match(client,/await acknowledge\(id\); view\(id\)/);assert.match(client,/Notification\.requestPermission\(\)/);assert.match(client,/pushManager\.subscribe/);
+    const styles=fs.readFileSync(path.join(__dirname,"../public/alert-app.css"),"utf8");assert.match(styles,/grid-template-areas:"name actions" "meta actions"/);assert.match(styles,/padding:7px 12px/);assert.match(styles,/min-height:68px/);assert.match(styles,/\.alert\.unacknowledged\{animation:new-order-pulse/);assert.match(styles,/prefers-reduced-motion:reduce/);assert.match(styles,/\.details\{[^}]*padding:11px[^}]*font-size:14px/);assert.match(styles,/\.modifiers\{[^}]*margin-left:1\.5em/);
+    const worker=fs.readFileSync(path.join(__dirname,"../public/alert-sw.js"),"utf8");assert.match(worker,/notificationclick/);assert.match(worker,/open-order/);assert.match(worker,/url\.searchParams\.set\("order", order\)/);assert.doesNotMatch(worker,/Square|jobReference|token1/);
     process.env.PUSHOVER_DEVICE_1="front-counter";process.env.PUSHOVER_DEVICE_2="kitchen-tablet";
     const push=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(push.priority,"2");assert.strictEqual(push.retry,"60");assert.strictEqual(push.expire,"1800");assert.strictEqual(push.title,"Pat - UberEats - Delivery");assert.strictEqual(push.message,"Total: 3 Items\n\n2x Burger\n    3x Pickle\n\n1x Shake\n    2x Cherry");assert.ok(push.message.startsWith("Total: 3 Items"));assert.strictEqual(push.device,"front-counter");assert.notStrictEqual(push.device,process.env.PUSHOVER_DEVICE_2);assert.doesNotMatch(push.message,/Pat|UberEats|Delivery|Order #|Schedule|Ordered on|Phone|\$|payment|tender|card|subtotal|tax|tip|token|secret|•/i);assert.match(push.url,new RegExp(`/alert1\\?key=alert-test-key&order=${first.id}$`));assert.strictEqual(push.url_title,"View Details");assert.doesNotMatch(push.url,new RegExp(`${token1}|A1`));
     const example=alertSystem.createShopAlert({shop:1,jobReference:"title-example",source:"DoorDash",type:"Delivery",customer:"Tristan G."});const examplePush=alertSystem.buildPushoverValues(example,"token","user");assert.strictEqual(examplePush.title,"Tristan G. - DoorDash - Delivery");assert.strictEqual(examplePush.message,"Total: 0 Items");
     const push2=alertSystem.buildPushoverValues(second,"token","user");assert.strictEqual(push2.title,"Customer - DoorDash - Pickup");assert.strictEqual(push2.message,"Total: 1 Items\n\n1x Donut");assert.match(push2.url,new RegExp(`/alert2\\?key=alert-test-key&order=${second.id}$`));assert.strictEqual(push2.device,"kitchen-tablet");assert.notStrictEqual(push2.device,process.env.PUSHOVER_DEVICE_1);
     delete process.env.PUSHOVER_DEVICE_1;const fallback=alertSystem.buildPushoverValues(first,"token","user");assert.strictEqual(fallback.user,"user");assert.strictEqual(Object.hasOwn(fallback,"device"),false);delete process.env.PUSHOVER_DEVICE_2;
     const generic=alertSystem.createShopAlert({shop:1,jobReference:"generic",source:"UberEats",type:"Pickup",customer:"Online Order"});assert.strictEqual(alertSystem.buildPushoverValues(generic,"token","user").title,"Customer - UberEats - Pickup");
-    const pushoverSource=fs.readFileSync(path.join(__dirname,"../alert-system.cjs"),"utf8");assert.doesNotMatch(pushoverSource,/New Order - Shop/);
+    const stale={endpoint:"https://push.example/stale",keys:{p256dh:"stale-public-key",auth:"stale-auth"}};alertSystem.registerPushSubscription(1,stale);
+    alertSystem._setPushTransportForTests(async subscription=>({statusCode:subscription.endpoint===stale.endpoint?410:201}));await alertSystem.sendWebPush(first);assert.strictEqual(alertSystem.getPushSubscriptions(1).some(s=>s.endpoint===stale.endpoint),false);
     delete process.env.CLEAR_KEY;assert.strictEqual((await request("GET","/alert1?key=alert-test-key")).status,404);
     console.log("Alert system verification passed");
   } finally { server.close(); }

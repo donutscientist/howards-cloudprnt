@@ -2,10 +2,13 @@
   const shop = Number(location.pathname.match(/^\/alert(\d+)/)?.[1]);
   const key = new URLSearchParams(location.search).get("key") || "";
   const api = () => `/api/alert${shop}?key=${encodeURIComponent(key)}`;
-  let alerts = [], openedOrder = "", selectedTab = "active";
+  let alerts = [], openedOrder = "", selectedTab = "active", serviceWorkerRegistration;
   const $ = (id) => document.getElementById(id);
   const escape = (s) => String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const itemQuantity = (item) => Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
+  const orderedTime = (alert) => String(alert.orderedTime || alert.receivedTime || "").match(/\b\d{1,2}:\d{2}\s*[AP]M\b/i)?.[0] || alert.orderedTime || alert.receivedTime || "";
+  const applicationServerKey = (value) => { const padding = "=".repeat((4 - value.length % 4) % 4); return Uint8Array.from(atob((value + padding).replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)); };
+
   function render() {
     const activeCount = alerts.filter(a => a.status === "active").length;
     const completeCount = alerts.filter(a => a.status === "complete").length;
@@ -13,7 +16,7 @@
     $("orderTabs").querySelector('[data-tab="active"]').textContent = `Active (${activeCount})`;
     $("orderTabs").querySelector('[data-tab="complete"]').textContent = `Complete (${completeCount})`;
     $("orderTabs").querySelectorAll("button").forEach(button => button.classList.toggle("selected", button.dataset.tab === selectedTab));
-    $("alerts").innerHTML = records.length ? records.map(a => `<article class="alert" data-order="${a.id}" tabindex="0" role="button" aria-label="Open order for ${escape(a.customer || "Customer")}"><h2>${escape(a.customer || "Customer")}</h2><div class="meta">${escape(a.source)} - ${escape(a.type)}</div><div class="actions"><button data-status="${selectedTab === "active" ? "complete" : "active"}" data-id="${a.id}">${selectedTab === "active" ? "PICKED UP" : "UNDO"}</button></div></article>`).join("") : `<div class="empty">No ${selectedTab} orders.</div>`;
+    $("alerts").innerHTML = records.length ? records.map(a => `<article class="alert${!a.acknowledged ? " unacknowledged" : ""}" data-order="${a.id}" tabindex="0" role="button" aria-label="Open order for ${escape(a.customer || "Customer")}"><h2>${escape(a.customer || "Customer")} - ${escape(orderedTime(a))}</h2><div class="meta">${escape(a.source)} - ${escape(a.type)}</div><div class="actions"><button data-status="${selectedTab === "active" ? "complete" : "active"}" data-id="${a.id}">${selectedTab === "active" ? "PICKED UP" : "UNDO"}</button></div></article>`).join("") : `<div class="empty">No ${selectedTab} orders.</div>`;
   }
   async function refresh() {
     try {
@@ -22,7 +25,7 @@
       alerts = (await response.json()).alerts;
       $("status").textContent = "CONNECTED"; $("status").className = "status connected"; render();
       const requested = new URLSearchParams(location.search).get("order");
-      if (requested && requested !== openedOrder) view(requested);
+      if (requested && requested !== openedOrder) void openOrder(requested);
     } catch {
       $("status").textContent = navigator.onLine ? "RECONNECTING" : "OFFLINE";
       $("status").className = "status " + (navigator.onLine ? "reconnecting" : "offline");
@@ -31,9 +34,21 @@
   function view(id) {
     const a = alerts.find(x => x.id === id); if (!a) return; openedOrder = id;
     $("listView").classList.add("hidden"); $("detailView").classList.remove("hidden");
+    $("detailAction").textContent = a.status === "active" ? "PICKED UP" : "UNDO";
+    $("detailAction").dataset.status = a.status === "active" ? "complete" : "active";
+    $("detailAction").dataset.id = a.id;
     const totalItems = a.items.reduce((total, item) => total + itemQuantity(item.item), 0);
     $("detailBody").innerHTML = `<div class="customer-details"><h2 class="customer-name">${escape(a.customer || "Customer")}</h2><div class="detail-meta"><p>${escape(a.source)} - ${escape(a.type)}</p><p>Ordered on: ${escape(a.orderedTime || a.receivedTime)}</p>${a.reference ? `<p>Order ID: ${escape(a.reference)}</p>` : ""}${a.scheduledTime || a.scheduleType ? `<p>Schedule: ${escape(a.scheduledTime || a.scheduleType)}</p>` : ""}</div><hr class="detail-separator"></div><h2 class="items-heading">Total: ${escape(totalItems)} Items</h2><div class="item-list">${a.items.map(i => `<div class="item"><div class="item-name">${escape(i.item)}</div>${i.modifiers.length ? `<div class="modifiers">${i.modifiers.map(m => `<div class="modifier">${escape(m)}</div>`).join("")}</div>` : ""}</div>`).join("")}</div>${a.customerNote ? `<p><strong>Customer note:</strong> ${escape(a.customerNote)}</p>` : ""}${a.fulfillmentNote ? `<p><strong>Order note:</strong> ${escape(a.fulfillmentNote)}</p>` : ""}`;
   }
+  async function acknowledge(id) {
+    const current = alerts.find(a => a.id === id);
+    if (!current || current.acknowledged) return;
+    const response = await fetch(`/api/alert${shop}/${encodeURIComponent(id)}/acknowledge?key=${encodeURIComponent(key)}`, { method: "POST" });
+    if (!response.ok) throw Error(response.status);
+    const updated = (await response.json()).alert;
+    alerts = alerts.map(alert => alert.id === id ? updated : alert); render();
+  }
+  async function openOrder(id) { try { await acknowledge(id); view(id); } catch { await refresh(); } }
   function closeDetail() {
     openedOrder = ""; $("detailView").classList.add("hidden"); $("listView").classList.remove("hidden");
     history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}`);
@@ -42,19 +57,38 @@
     const response = await fetch(`/api/alert${shop}/${encodeURIComponent(id)}/${status}?key=${encodeURIComponent(key)}`, { method: "POST" });
     if (!response.ok) throw Error(response.status);
     const updated = (await response.json()).alert;
-    alerts = alerts.map(alert => alert.id === id ? updated : alert);
-    render();
+    alerts = alerts.map(alert => alert.id === id ? updated : alert); render();
+  }
+  async function updateNotificationSetup() {
+    if (!serviceWorkerRegistration || !("PushManager" in window) || !("Notification" in window)) return;
+    const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    $("enableNotifications").classList.toggle("hidden", Boolean(subscription) || Notification.permission === "denied");
+  }
+  async function enableNotifications() {
+    if (Notification.permission === "denied") return updateNotificationSetup();
+    const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (permission !== "granted") return updateNotificationSetup();
+    const response = await fetch(`/api/alert${shop}/push-key?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+    const publicKey = (await response.json()).publicKey;
+    if (!publicKey) throw Error("Web Push is not configured");
+    const subscription = await serviceWorkerRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey(publicKey) });
+    const saved = await fetch(`/api/alert${shop}/push-subscription?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subscription) });
+    if (!saved.ok) throw Error(saved.status);
+    await updateNotificationSetup();
   }
   $("alerts").onclick = e => {
     const action = e.target.closest("button[data-status]");
     if (action) { e.stopPropagation(); void setStatus(action.dataset.id, action.dataset.status); return; }
-    const card = e.target.closest("[data-order]"); if (card) view(card.dataset.order);
+    const card = e.target.closest("[data-order]"); if (card) void openOrder(card.dataset.order);
   };
-  $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); view(e.target.dataset.order); } };
+  $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); void openOrder(e.target.dataset.order); } };
   $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; selectedTab = e.target.dataset.tab; closeDetail(); render(); };
-  $("back").onclick = closeDetail;
+  $("detailAction").onclick = async e => { await setStatus(e.target.dataset.id, e.target.dataset.status); selectedTab = e.target.dataset.status; closeDetail(); render(); };
+  $("enableNotifications").onclick = () => void enableNotifications();
+  navigator.serviceWorker?.addEventListener("message", event => { if (event.data?.type === "open-order" && event.data.shop === shop) { history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}&order=${encodeURIComponent(event.data.order)}`); void refresh(); } });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
   window.addEventListener("online", refresh); $("shop").textContent = `Shop #${shop}`;
   document.querySelector('link[rel="manifest"]').href = `/alert${shop}/manifest.webmanifest?key=${encodeURIComponent(key)}`;
-  navigator.serviceWorker?.register('/alert-sw.js'); refresh(); setInterval(refresh, 3000);
+  navigator.serviceWorker?.register("/alert-sw.js").then(() => navigator.serviceWorker.ready).then(registration => { serviceWorkerRegistration = registration; registration.active?.postMessage({ type: "configure-shop", shop, appUrl: location.href }); return updateNotificationSetup(); });
+  refresh(); setInterval(refresh, 3000);
 })();
