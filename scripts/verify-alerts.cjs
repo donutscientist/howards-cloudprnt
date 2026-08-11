@@ -2,7 +2,7 @@ const assert = require("assert");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { ORDER_ALARM_REPEAT_MS, createOrderAlarmController } = require("../public/order-alarm.js");
+const { ORDER_ALARM_REPEAT_MS, ORDER_ALARM_GAIN, ORDER_ALARM_PATTERN, playAttentionTone, createOrderAlarmController } = require("../public/order-alarm.js");
 
 process.env.CLEAR_KEY = "alert-test-key";
 process.env.BUSINESS_TZ = "UTC";
@@ -91,7 +91,12 @@ function request(method, url, body = "") { return new Promise((resolve, reject) 
     newTwo.acknowledged=true;controller.update([newOne,newTwo]);assert.strictEqual(controller.isRunning(),false);assert.strictEqual(clears,1);
     const alarmThird={status:"active",acknowledged:false};controller.update([alarmThird]);assert.strictEqual(intervals,2);alarmThird.status="complete";controller.update([alarmThird]);assert.strictEqual(controller.isRunning(),false);
     alarmThird.status="active";controller.update([alarmThird]);assert.strictEqual(controller.isRunning(),true);controller.update([alarmThird],false);assert.strictEqual(controller.isRunning(),false);controller.update([alarmThird],true);assert.strictEqual(controller.isRunning(),true);
-    controller.update([],true);assert.strictEqual(controller.isRunning(),false);assert.strictEqual(ORDER_ALARM_REPEAT_MS,2500);
+    controller.update([],true);assert.strictEqual(controller.isRunning(),false);assert.strictEqual(ORDER_ALARM_REPEAT_MS,1800);
+    assert.strictEqual(ORDER_ALARM_GAIN,1);assert.deepStrictEqual(ORDER_ALARM_PATTERN,[{frequency:1000,duration:.25},{frequency:1500,duration:.25},{frequency:1000,duration:.25},{frequency:1500,duration:.4}]);
+    const scheduled=[],envelopeEvents=[];let startedAt,stoppedAt,connectedOutput;
+    const fakeOutput={};
+    const fakeAudioContext={currentTime:4,createOscillator(){return {frequency:{setValueAtTime(frequency,time){scheduled.push({frequency,time})}},connect(){return {connect(output){connectedOutput=output}}},start(time){startedAt=time},stop(time){stoppedAt=time}}},createGain(){return {gain:{setValueAtTime(value,time){envelopeEvents.push({method:"set",value,time})},linearRampToValueAtTime(value,time){envelopeEvents.push({method:"ramp",value,time})}}}}};
+    playAttentionTone(fakeAudioContext,fakeOutput);assert.deepStrictEqual(scheduled.map(t=>t.frequency),[1000,1500,1000,1500]);assert.strictEqual(startedAt,4);assert.strictEqual(stoppedAt,5.15);assert.strictEqual(connectedOutput,fakeOutput);assert.ok(envelopeEvents.some(event=>event.value===1));
     const styles=fs.readFileSync(path.join(__dirname,"../public/alert-app.css"),"utf8");assert.match(styles,/grid-template-areas:"name actions" "meta actions"/);assert.match(styles,/padding:7px 12px/);assert.match(styles,/min-height:68px/);assert.match(styles,/\.alert\.unacknowledged\{animation:new-order-pulse/);assert.match(styles,/prefers-reduced-motion:reduce/);assert.match(styles,/\.details\{[^}]*padding:11px[^}]*font-size:14px/);assert.match(styles,/\.modifiers\{[^}]*margin-left:1\.5em/);
     const worker=fs.readFileSync(path.join(__dirname,"../public/alert-sw.js"),"utf8");assert.match(worker,/notificationclick/);assert.match(worker,/open-order/);assert.match(worker,/url\.searchParams\.set\("order", order\)/);assert.doesNotMatch(worker,/Square|jobReference|token1/);
     const refreshActive=alertSystem.createShopAlert({shop:1,jobReference:"refresh-active",source:"DoorDash",type:"Pickup"});
@@ -110,6 +115,8 @@ function request(method, url, body = "") { return new Promise((resolve, reject) 
     assert.match(client,/a\.status === "active" && !a\.acknowledged/);
     assert.match(client,/function playUiClick\(\)/);
     assert.match(client,/gain\.gain\.setValueAtTime\(\.045/);
+    assert.match(client,/alarmGain\.gain\.value = OrderAlarm\.ORDER_ALARM_GAIN/);
+    assert.match(client,/if \(audioUnlocked\) \{ orderAlarm\.stop\(\); syncAlarm\(\); \}/);
     assert.match(client,/e\.stopPropagation\(\); playUiClick\(\)/);
     assert.match(client,/catch \{\}/);
     assert.match(styles,/@keyframes new-order-pulse\{[^}]*background-color:var\(--panel\)[\s\S]*background-color:#594b12/);
