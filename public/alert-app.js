@@ -2,19 +2,15 @@
   const shop = Number(location.pathname.match(/^\/alert(\d+)/)?.[1]);
   const key = new URLSearchParams(location.search).get("key") || "";
   const api = () => `/api/alert${shop}?key=${encodeURIComponent(key)}`;
-  let alerts = [], openedOrder = "", selectedTab = "active", serviceWorkerRegistration, audioContext, audioUnlocked = false;
+  let alerts = [], openedOrder = "", selectedTab = "active", serviceWorkerRegistration, audioContext, alarmGain, audioUnlocked = false;
   const $ = (id) => document.getElementById(id);
   const escape = (s) => String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const itemQuantity = (item) => Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
   const orderedTime = (alert) => String(alert.orderedTime || alert.receivedTime || "").match(/\b\d{1,2}:\d{2}\s*[AP]M\b/i)?.[0] || alert.orderedTime || alert.receivedTime || "";
   const applicationServerKey = (value) => { const padding = "=".repeat((4 - value.length % 4) % 4); return Uint8Array.from(atob((value + padding).replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)); };
   function playOrderTone() {
-    if (!audioUnlocked || !audioContext || audioContext.state !== "running") return;
-    const oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
-    oscillator.frequency.value = 880;
-    gain.gain.setValueAtTime(.35, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + .65);
-    oscillator.connect(gain).connect(audioContext.destination); oscillator.start(); oscillator.stop(audioContext.currentTime + .65);
+    if (!audioUnlocked || !audioContext || audioContext.state !== "running" || !alarmGain) return;
+    OrderAlarm.playAttentionTone(audioContext, alarmGain);
   }
   function playUiClick() {
     try {
@@ -35,8 +31,16 @@
     if (audioUnlocked) return;
     try {
       audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+      if (!alarmGain) {
+        alarmGain = audioContext.createGain();
+        alarmGain.gain.value = OrderAlarm.ORDER_ALARM_GAIN;
+        alarmGain.connect(audioContext.destination);
+      }
       const resumed = audioContext.resume();
-      Promise.resolve(resumed).then(() => { audioUnlocked = audioContext.state === "running"; }).catch(() => {});
+      Promise.resolve(resumed).then(() => {
+        audioUnlocked = audioContext.state === "running";
+        if (audioUnlocked) { orderAlarm.stop(); syncAlarm(); }
+      }).catch(() => {});
     } catch {}
   }
 
