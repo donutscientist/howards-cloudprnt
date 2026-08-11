@@ -2,15 +2,29 @@
   const shop = Number(location.pathname.match(/^\/alert(\d+)/)?.[1]);
   const key = new URLSearchParams(location.search).get("key") || "";
   const api = () => `/api/alert${shop}?key=${encodeURIComponent(key)}`;
-  let alerts = [], openedOrder = "", selectedTab = "active", serviceWorkerRegistration, audioContext, alarmGain, audioUnlocked = false;
+  let alerts = [], openedOrder = "", selectedTab = "active", serviceWorkerRegistration, audioContext, audioUnlocked = false, alarmAudioUnlocked = false, finishAlarmPlayback;
   const $ = (id) => document.getElementById(id);
   const escape = (s) => String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const itemQuantity = (item) => Number(String(item || "").match(/^\s*(\d+(?:\.\d+)?)x\b/i)?.[1] || 0);
   const orderedTime = (alert) => String(alert.orderedTime || alert.receivedTime || "").match(/\b\d{1,2}:\d{2}\s*[AP]M\b/i)?.[0] || alert.orderedTime || alert.receivedTime || "";
   const applicationServerKey = (value) => { const padding = "=".repeat((4 - value.length % 4) % 4); return Uint8Array.from(atob((value + padding).replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)); };
-  function playOrderTone() {
-    if (!audioUnlocked || !audioContext || audioContext.state !== "running" || !alarmGain) return;
-    OrderAlarm.playAttentionTone(audioContext, alarmGain);
+  const alarmAudio = new Audio(OrderAlarm.ORDER_ALARM_URL);
+  alarmAudio.preload = "auto";
+  alarmAudio.volume = OrderAlarm.ORDER_ALARM_VOLUME;
+  function resetAlarmPlayback() {
+    alarmAudio.pause();
+    alarmAudio.currentTime = 0;
+    finishAlarmPlayback?.();
+    finishAlarmPlayback = undefined;
+  }
+  function playEntireOrderAlarm() {
+    resetAlarmPlayback();
+    return new Promise((resolve, reject) => {
+      finishAlarmPlayback = resolve;
+      alarmAudio.onended = () => { finishAlarmPlayback = undefined; resolve(); };
+      alarmAudio.onerror = () => { finishAlarmPlayback = undefined; reject(Error("Order alarm playback failed")); };
+      Promise.resolve(alarmAudio.play()).catch(error => { finishAlarmPlayback = undefined; reject(error); });
+    });
   }
   function playUiClick() {
     try {
@@ -25,22 +39,22 @@
       oscillator.start(); oscillator.stop(audioContext.currentTime + .06);
     } catch {}
   }
-  const orderAlarm = OrderAlarm.createOrderAlarmController(playOrderTone);
-  function syncAlarm() { orderAlarm.update(alerts, document.visibilityState !== "hidden"); }
+  const orderAlarm = OrderAlarm.createOrderAlarmController(playEntireOrderAlarm, resetAlarmPlayback);
+  function syncAlarm() { orderAlarm.update(alerts, alarmAudioUnlocked && document.visibilityState !== "hidden"); }
   function unlockAudio() {
-    if (audioUnlocked) return;
     try {
       audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
-      if (!alarmGain) {
-        alarmGain = audioContext.createGain();
-        alarmGain.gain.value = OrderAlarm.ORDER_ALARM_GAIN;
-        alarmGain.connect(audioContext.destination);
-      }
       const resumed = audioContext.resume();
       Promise.resolve(resumed).then(() => {
         audioUnlocked = audioContext.state === "running";
-        if (audioUnlocked) { orderAlarm.stop(); syncAlarm(); }
       }).catch(() => {});
+      if (!alarmAudioUnlocked) {
+        alarmAudio.muted = true;
+        Promise.resolve(alarmAudio.play()).then(() => {
+          alarmAudio.pause(); alarmAudio.currentTime = 0; alarmAudio.muted = false;
+          alarmAudioUnlocked = true; orderAlarm.stop(); syncAlarm();
+        }).catch(() => { alarmAudio.muted = false; });
+      }
     } catch {}
   }
 
@@ -79,12 +93,15 @@
   async function acknowledge(id) {
     const current = alerts.find(a => a.id === id);
     if (!current || current.acknowledged) return;
+    alerts = alerts.map(alert => alert.id === id ? { ...alert, acknowledged: true, acknowledgedAt: new Date().toISOString() } : alert);
+    render();
     const response = await fetch(`/api/alert${shop}/${encodeURIComponent(id)}/acknowledge?key=${encodeURIComponent(key)}`, { method: "POST" });
     if (!response.ok) throw Error(response.status);
     const updated = (await response.json()).alert;
     alerts = alerts.map(alert => alert.id === id ? updated : alert); render();
   }
   async function openOrder(id) { try { await acknowledge(id); view(id); } catch { await refresh(); } }
+  async function pickUp(id) { try { await acknowledge(id); await setStatus(id, "complete"); } catch { await refresh(); } }
   function closeDetail() {
     openedOrder = ""; $("detailView").classList.add("hidden"); $("listView").classList.remove("hidden");
     history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}`);
@@ -109,13 +126,13 @@
   }
   $("alerts").onclick = e => {
     const action = e.target.closest("button[data-status]");
-    if (action) { e.stopPropagation(); playUiClick(); void setStatus(action.dataset.id, action.dataset.status); return; }
+    if (action) { e.stopPropagation(); playUiClick(); if (action.dataset.status === "complete") void pickUp(action.dataset.id); else void setStatus(action.dataset.id, action.dataset.status); return; }
     const card = e.target.closest("[data-order]"); if (card) { playUiClick(); void openOrder(card.dataset.order); }
   };
   $("alerts").onkeydown = e => { if ((e.key === "Enter" || e.key === " ") && !e.target.closest("button") && e.target.dataset.order) { e.preventDefault(); playUiClick(); void openOrder(e.target.dataset.order); } };
   $("orderTabs").onclick = e => { if (!e.target.dataset.tab) return; playUiClick(); selectedTab = e.target.dataset.tab; closeDetail(); render(); };
   $("refreshOrders").onclick = () => { playUiClick(); void refresh(); };
-  $("detailAction").onclick = async e => { playUiClick(); await setStatus(e.target.dataset.id, e.target.dataset.status); selectedTab = e.target.dataset.status; closeDetail(); render(); };
+  $("detailAction").onclick = async e => { playUiClick(); if (e.target.dataset.status === "complete") await pickUp(e.target.dataset.id); else await setStatus(e.target.dataset.id, e.target.dataset.status); selectedTab = e.target.dataset.status; closeDetail(); render(); };
   navigator.serviceWorker?.addEventListener("message", event => { if (event.data?.type === "open-order" && event.data.shop === shop) { history.replaceState(null, "", `/alert${shop}?key=${encodeURIComponent(key)}&order=${encodeURIComponent(event.data.order)}`); void refresh(); } });
   document.addEventListener("visibilitychange", () => { syncAlarm(); if (document.visibilityState === "visible") void refresh(); });
   window.addEventListener("pageshow", () => { syncAlarm(); void refresh(); });
