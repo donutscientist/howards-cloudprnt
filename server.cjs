@@ -617,7 +617,7 @@ if (platform === "DD") {
       parsed.note
     );
 
-    const printJobId = enqueueReceipt(jobBuf, "", { source: platform === "GH" ? "GrubHub" : "DoorDash", orderType: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup" });
+    const printJobId = enqueueReceipt(jobBuf, process.env.ROUTE_1, { source: platform === "GH" ? "GrubHub" : "DoorDash", orderType: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup" });
     alertSystem.createShopAlert({
       shop: 1, jobReference: `email:${messageId}`, source: platform === "GH" ? "GrubHub" : "DoorDash",
       type: (parsed.orderType || "").includes("Delivery") ? "Delivery" : "Pickup",
@@ -1392,4 +1392,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, EMAIL_POLL_MS, PRINTER_POLL_SECONDS, alertSystem };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, gmail, legacyQueueCounts: () => ({ active: activeJobs.size, pending: pending.length }), EMAIL_POLL_MS, PRINTER_POLL_SECONDS, alertSystem };

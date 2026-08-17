@@ -17,7 +17,7 @@ process.env.CLIENT_ID = 'test';
 process.env.CLIENT_SECRET = 'test';
 process.env.REFRESH_TOKEN = 'test';
 
-const { app, parseSquareOrder, buildReceipt, enqueueReceipt, getRouteQueue, printerPollState, checkPollingStatus, parseGrubHub, EMAIL_POLL_MS, PRINTER_POLL_SECONDS } = require('../server.cjs');
+const { app, parseSquareOrder, buildReceipt, enqueueReceipt, getRouteQueue, printerPollState, checkPollingStatus, parseGrubHub, checkEmail, gmail, legacyQueueCounts, EMAIL_POLL_MS, PRINTER_POLL_SECONDS } = require('../server.cjs');
 
 const server = app.listen(0);
 const port = server.address().port;
@@ -160,6 +160,57 @@ async function assertNoJobs() {
     assert.strictEqual(ghParsed.customer, 'Pat Customer');
     assert.strictEqual(ghParsed.orderType, 'GrubHub Delivery');
     assert.deepStrictEqual(ghParsed.items, [{ item: '2x Burger', modifiers: ['2x Cheese'] }]);
+
+    // Gmail receipts enter only the shared ROUTE_1 queue used by /print1 and /starcloudprint.
+    const emailHtml = '<html><body><div>Deliver to:</div><div>Email Customer</div><table><tr><td>1</td><td>x</td><td>Email Burger</td></tr></table></body></html>';
+    const emailPayload = Buffer.from(emailHtml).toString('base64url');
+    const originalList = gmail.users.messages.list;
+    const originalGet = gmail.users.messages.get;
+    const originalModify = gmail.users.messages.modify;
+    let listCall = 0;
+    let modifiedMessage = null;
+    gmail.users.messages.list = async () => (++listCall === 1 ? { data: { messages: [{ id: 'email-shop-1' }] } } : { data: {} });
+    gmail.users.messages.get = async () => ({ data: { payload: { headers: [{ name: 'Subject', value: 'Order 123-456' }], parts: [{ mimeType: 'text/html', body: { data: emailPayload } }] } } });
+    gmail.users.messages.modify = async ({ id }) => { modifiedMessage = id; return { data: {} }; };
+    const emailParsed = parseGrubHub(emailHtml);
+    emailParsed.phone = 'Order #123-456';
+    const expectedEmailReceipt = buildReceipt(emailParsed.customer, emailParsed.orderType, emailParsed.phone, emailParsed.totalItems, emailParsed.items, emailParsed.estimate, emailParsed.note);
+    const route1QueueForEmail = getRouteQueue(process.env.ROUTE_1);
+    const route2QueueForEmail = getRouteQueue(process.env.ROUTE_2);
+    const route2BeforeEmail = { active: route2QueueForEmail.activeJobs.size, pending: route2QueueForEmail.pending.length };
+    const legacyBeforeEmail = legacyQueueCounts();
+    await checkEmail();
+    gmail.users.messages.list = originalList;
+    gmail.users.messages.get = originalGet;
+    gmail.users.messages.modify = originalModify;
+    assert.strictEqual(modifiedMessage, 'email-shop-1');
+    assert.deepStrictEqual(legacyQueueCounts(), legacyBeforeEmail);
+    assert.deepStrictEqual({ active: route2QueueForEmail.activeJobs.size, pending: route2QueueForEmail.pending.length }, route2BeforeEmail);
+    const emailPoll = await poll('print1');
+    assert.strictEqual(emailPoll.json.jobReady, true);
+    const emailToken = emailPoll.json.jobToken;
+    assert.strictEqual(route1QueueForEmail.activeJobs.has(emailToken), true);
+    const emailDownload = await request('GET', `/print1?token=${encodeURIComponent(emailToken)}`);
+    assert.strictEqual(emailDownload.status, 200);
+    assert.deepStrictEqual(emailDownload.body, expectedEmailReceipt);
+    assert.strictEqual(route1QueueForEmail.activeJobs.has(emailToken), false);
+    assert.strictEqual(route1QueueForEmail.pending.includes(emailToken), false);
+    assert.strictEqual((await request('GET', `/print1?token=${encodeURIComponent(emailToken)}`)).status, 204);
+
+    listCall = 0;
+    gmail.users.messages.list = async () => (++listCall === 1 ? { data: { messages: [{ id: 'email-shop-1-alias' }] } } : { data: {} });
+    gmail.users.messages.get = async () => ({ data: { payload: { headers: [{ name: 'Subject', value: 'Order 789-012' }], parts: [{ mimeType: 'text/html', body: { data: emailPayload } }] } } });
+    gmail.users.messages.modify = async () => ({ data: {} });
+    await checkEmail();
+    gmail.users.messages.list = originalList;
+    gmail.users.messages.get = originalGet;
+    gmail.users.messages.modify = originalModify;
+    const aliasPoll = await poll('starcloudprint');
+    assert.strictEqual(aliasPoll.json.jobReady, true);
+    assert.strictEqual((await request('GET', `/starcloudprint?token=${encodeURIComponent(aliasPoll.json.jobToken)}`)).status, 200);
+    assert.strictEqual((await request('GET', `/print1?token=${encodeURIComponent(aliasPoll.json.jobToken)}`)).status, 204);
+    assert.deepStrictEqual(legacyQueueCounts(), legacyBeforeEmail);
+    assert.deepStrictEqual({ active: route2QueueForEmail.activeJobs.size, pending: route2QueueForEmail.pending.length }, route2BeforeEmail);
 
     let body = event('evt-same-a', 'order-same');
     const routeLogs = [];
