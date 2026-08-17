@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node server.cjs",
     "check": "node --check server.cjs",
-    "test": "node scripts/verify-square-webhook.cjs && node scripts/verify-alerts.cjs",
+    "test": "node scripts/verify-square-webhook.cjs && node scripts/verify-email-print-route.cjs && node scripts/verify-alerts.cjs",
     "test:alerts": "node scripts/verify-alerts.cjs"
   },
   "dependencies": {

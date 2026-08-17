@@ -607,6 +607,21 @@ if (platform === "DD") {
 }
     if (!parsed) return;
 
+    processEmailOrder(parsed, platform, messageId);
+
+    await gmail.users.messages.modify({
+      userId: "me",
+      id: messageId,
+      requestBody: { removeLabelIds: ["UNREAD"] }
+    });
+
+    console.log("PRINT JOB ADDED");
+  } catch (e) {
+    console.log("CHECK EMAIL ERROR:", e.message);
+  }
+}
+
+function processEmailOrder(parsed, platform, messageId) {
     const jobBuf = buildReceipt(
       parsed.customer,
       parsed.orderType,
@@ -624,17 +639,7 @@ if (platform === "DD") {
       customer: parsed.customer, reference: String(parsed.phone || "").replace(/^Order\s*#/i, "").trim(),
       items: parsed.items, customerNote: parsed.note
     });
-
-    await gmail.users.messages.modify({
-      userId: "me",
-      id: messageId,
-      requestBody: { removeLabelIds: ["UNREAD"] }
-    });
-
-    console.log("PRINT JOB ADDED");
-  } catch (e) {
-    console.log("CHECK EMAIL ERROR:", e.message);
-  }
+    return { printJobId, waitingOrderId: getRouteQueue(process.env.ROUTE_1).activeJobs.get(printJobId).metadata.removalId, jobBuf };
 }
 
 
@@ -1392,4 +1397,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, checkEmail, gmail, legacyQueueCounts: () => ({ active: activeJobs.size, pending: pending.length }), EMAIL_POLL_MS, PRINTER_POLL_SECONDS, alertSystem };
+module.exports = { app, buildReceipt, parseSquareOrder, verifySquareSignature, normalizePrintRoute, queuedSquareOrders, enqueueReceipt, getRouteQueue, notePrinterPoll, printerPollState, checkPollingStatus, isSquarePrintable, formatBusinessTimestamp, parseGrubHub, parseDoorDashPDF, processEmailOrder, checkEmail, gmail, legacyQueueCounts: () => ({ active: activeJobs.size, pending: pending.length }), EMAIL_POLL_MS, PRINTER_POLL_SECONDS, alertSystem };
