@@ -17,7 +17,7 @@ process.env.CLIENT_ID = 'test';
 process.env.CLIENT_SECRET = 'test';
 process.env.REFRESH_TOKEN = 'test';
 
-const { app, parseSquareOrder, buildReceipt, enqueueReceipt, printerPollState, checkPollingStatus, parseGrubHub, EMAIL_POLL_MS, PRINTER_POLL_SECONDS } = require('../server.cjs');
+const { app, parseSquareOrder, buildReceipt, enqueueReceipt, getRouteQueue, printerPollState, checkPollingStatus, parseGrubHub, EMAIL_POLL_MS, PRINTER_POLL_SECONDS } = require('../server.cjs');
 
 const server = app.listen(0);
 const port = server.address().port;
@@ -260,13 +260,34 @@ async function assertNoJobs() {
     await sleep(50);
     assert.strictEqual((await drain('print1')).json.jobReady, true);
 
-    const defaultToken = enqueueReceipt(buildReceipt('c', 'DoorDash Pickup', '', '1', [{ item: '1x Default', modifiers: [] }]), '', { source: 'DoorDash', orderType: 'Pickup' });
-    const defaultPoll = await request('POST', '/starcloudprint', '{}', { 'content-type': 'application/json' });
-    const defaultJson = JSON.parse(defaultPoll.body.toString('utf8'));
-    assert.strictEqual(defaultJson.jobReady, true);
-    assert.strictEqual(defaultJson.jobToken, defaultToken);
-    assert.strictEqual(defaultJson.nextPollInterval, PRINTER_POLL_SECONDS);
-    await request('GET', `/starcloudprint?token=${encodeURIComponent(defaultToken)}`);
+    // /starcloudprint is an alias for ROUTE_1, not an independent/default queue.
+    const route1Queue = getRouteQueue(process.env.ROUTE_1);
+    const route2Queue = getRouteQueue(process.env.ROUTE_2);
+    const route1JobsBefore = route1Queue.activeJobs.size;
+    const route2JobsBefore = route2Queue.activeJobs.size;
+    const route1Token = enqueueReceipt(Buffer.from('route-1-job'), process.env.ROUTE_1, { source: 'DoorDash', orderType: 'Pickup' });
+    const route2Token = enqueueReceipt(Buffer.from('route-2-job'), process.env.ROUTE_2, { source: 'GrubHub', orderType: 'Delivery' });
+    assert.strictEqual(route1Queue.activeJobs.size, route1JobsBefore + 1);
+    assert.strictEqual(route1Queue.pending.filter((token) => token === route1Token).length, 1);
+    assert.strictEqual(route2Queue.activeJobs.size, route2JobsBefore + 1);
+    assert.strictEqual(route2Queue.pending.filter((token) => token === route2Token).length, 1);
+
+    const starPoll = await request('POST', '/starcloudprint', '{}', { 'content-type': 'application/json' });
+    const starJson = JSON.parse(starPoll.body.toString('utf8'));
+    assert.strictEqual(starJson.jobReady, true);
+    assert.strictEqual(starJson.jobToken, route1Token);
+    assert.notStrictEqual(starJson.jobToken, route2Token);
+    assert.strictEqual(starJson.nextPollInterval, PRINTER_POLL_SECONDS);
+    const starDownload = await request('GET', `/starcloudprint?token=${encodeURIComponent(route1Token)}`);
+    assert.strictEqual(starDownload.status, 200);
+    assert.deepStrictEqual(starDownload.body, Buffer.from('route-1-job'));
+    assert.strictEqual(route1Queue.activeJobs.has(route1Token), false);
+    assert.strictEqual(route1Queue.pending.includes(route1Token), false);
+    assert.strictEqual((await request('GET', `/print1?token=${encodeURIComponent(route1Token)}`)).status, 204);
+    assert.strictEqual((await poll('starcloudprint')).json.jobReady, false);
+    assert.strictEqual(route2Queue.activeJobs.has(route2Token), true);
+    assert.strictEqual(route2Queue.pending.includes(route2Token), true);
+    assert.strictEqual((await drain('print2')).json.jobToken, route2Token);
 
     // Queue view is protected and chronological, uses only #1/#2, and remove only removes selected item.
     assert.strictEqual((await request('GET', '/v?key=bad')).status, 401);
