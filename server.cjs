@@ -1006,11 +1006,13 @@ app.post("/sq-webhook", (req, res) => {
 // --------------------
 
 app.post("/starcloudprint", (req, res) => {
-  notePrinterPoll("");
+  const route = normalizePrintRoute(process.env.ROUTE_1);
+  const queue = getRouteQueue(route);
+  notePrinterPoll(route);
 
-  if (pending.length > 0) {
-    const next = pending[0];
-    console.log(`JOB READY: ${routeLabelForRoute("")} -> ${next}`);
+  if (queue.pending.length > 0) {
+    const next = queue.pending[0];
+    console.log(`JOB READY: ${routeLabelForRoute(route)} -> ${next}`);
     return res.json({
       jobReady: true,
       mediaTypes: ["application/vnd.star.starprnt"],
@@ -1025,14 +1027,16 @@ app.post("/starcloudprint", (req, res) => {
 
 app.get("/starcloudprint", (req, res) => {
   const token = req.query.token || req.query.jobToken || req.query.jobid;
+  const route = normalizePrintRoute(process.env.ROUTE_1);
+  const queue = getRouteQueue(route);
 
-  if (!token || !activeJobs.has(token)) {
+  if (!token || !queue.activeJobs.has(token)) {
     return res.status(204).send();
   }
 
-  console.log(`JOB DOWNLOADED: ${routeLabelForRoute("")} -> ${token}`);
+  console.log(`JOB DOWNLOADED: ${routeLabelForRoute(route)} -> ${token}`);
 
-  const job = activeJobs.get(token);
+  const job = queue.activeJobs.get(token);
   const jobBuf = job?.buf || job;
 
   res.setHeader("Content-Type", "application/vnd.star.starprnt");
@@ -1041,8 +1045,8 @@ app.get("/starcloudprint", (req, res) => {
   res.send(jobBuf);
 
   if (job?.metadata?.removalId) removalIdToJob.delete(job.metadata.removalId);
-  activeJobs.delete(token);
-  pending = pending.filter((t) => t !== token);
+  queue.activeJobs.delete(token);
+  queue.pending = queue.pending.filter((t) => t !== token);
 });
 
 
